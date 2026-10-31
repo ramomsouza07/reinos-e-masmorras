@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #0c0d10;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #14161c;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2b303d;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #c59b27;
+}
+
+/* Parchment and fantasy text accents */
+.font-cinzel {
+  font-family: 'Cinzel', serif;
+}
+
+.gold-glow {
+  text-shadow: 0 0 10px rgba(197, 155, 39, 0.5);
+}
+
+.red-glow {
+  text-shadow: 0 0 10px rgba(180, 20, 20, 0.6);
+}
+
+.box-gold-glow {
+  box-shadow: 0 0 15px rgba(197, 155, 39, 0.25);
+}
+
+/* Die roll animation */
+@keyframes diceRoll {
+  0% { transform: rotate(0deg) scale(1); }
+  25% { transform: rotate(90deg) scale(1.15); }
+  50% { transform: rotate(180deg) scale(0.9); }
+  75% { transform: rotate(270deg) scale(1.1); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
+.animate-dice {
+  animation: diceRoll 0.4s ease-out;
+}
+
+/* Ping pulse animation */
+@keyframes pingRing {
+  0% {
+    transform: scale(0.3);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.5);
+    opacity: 0;
+  }
+}
+
+.ping-marker {
+  animation: pingRing 1.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
