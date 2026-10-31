@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import Lobby from './components/Lobby';
 import Navbar from './components/Navbar';
@@ -17,19 +17,17 @@ export default function App() {
   const [room, setRoom] = useState(null);
   const [isDM, setIsDM] = useState(false);
   const [myPlayerId, setMyPlayerId] = useState(null);
-  const [activeTab, setActiveTab] = useState('map'); // 'map' | 'sheet' | 'shop' | 'combat' | 'bestiary' | 'dice' | 'chat'
+  const [activeTab, setActiveTab] = useState('map');
   const [unreadChatCount, setUnreadChatCount] = useState(0);
 
-  // Connect socket on mount
   useEffect(() => {
-    // In dev Vite runs on 5173, backend on 3001. In prod both are served on 3001.
     const socketUrl = window.location.port === '5173' ? 'http://localhost:3001' : window.location.origin;
     const newSocket = io(socketUrl, {
       transports: ['websocket', 'polling']
     });
 
     newSocket.on('connect', () => {
-      console.log('[Socket] Conectado ao servidor:', newSocket.id);
+      console.log('[Socket] Conectado:', newSocket.id);
     });
 
     newSocket.on('room:state', (roomState) => {
@@ -37,6 +35,10 @@ export default function App() {
       setIsDM(roomState.isDM);
       setMyPlayerId(roomState.myPlayerId);
       setInGame(true);
+    });
+
+    newSocket.on('room:player_joined', ({ players, tokens }) => {
+      setRoom(prev => prev ? { ...prev, players, tokens } : prev);
     });
 
     newSocket.on('room:tokens_updated', (tokens) => {
@@ -55,12 +57,24 @@ export default function App() {
       setRoom(prev => prev ? { ...prev, players } : prev);
     });
 
+    newSocket.on('room:chests_updated', (chests) => {
+      setRoom(prev => prev ? { ...prev, chests } : prev);
+    });
+
+    newSocket.on('room:autodm_updated', (autoDM) => {
+      setRoom(prev => prev ? { ...prev, autoDM } : prev);
+    });
+
     newSocket.on('room:map_updated', (map) => {
       setRoom(prev => prev ? { ...prev, map } : prev);
     });
 
     newSocket.on('room:fog_updated', (fog) => {
       setRoom(prev => prev ? { ...prev, fog } : prev);
+    });
+
+    newSocket.on('room:fog_enabled_updated', (fogEnabled) => {
+      setRoom(prev => prev ? { ...prev, fogEnabled } : prev);
     });
 
     newSocket.on('combat:updated', (combat) => {
@@ -74,7 +88,6 @@ export default function App() {
         return { ...prev, chatHistory: history };
       });
 
-      // Increment unread count if not on chat tab
       setActiveTab(currentTab => {
         if (currentTab !== 'chat') {
           setUnreadChatCount(count => count + 1);
@@ -86,11 +99,11 @@ export default function App() {
     newSocket.on('character:sync', (syncedChar) => {
       setRoom(prev => {
         if (!prev || !newSocket.id) return prev;
-        const player = prev.players?.[newSocket.id];
-        if (player) {
-          player.character = syncedChar;
+        const players = { ...(prev.players || {}) };
+        if (players[newSocket.id]) {
+          players[newSocket.id] = { ...players[newSocket.id], character: syncedChar };
         }
-        return { ...prev };
+        return { ...prev, players };
       });
     });
 
@@ -128,7 +141,6 @@ export default function App() {
 
   return (
     <div className="w-screen h-screen overflow-hidden bg-dnd-dark text-gray-200 flex flex-col">
-      {/* Navigation Bar */}
       <Navbar
         room={room}
         isDM={isDM}
@@ -139,7 +151,6 @@ export default function App() {
         unreadChatCount={unreadChatCount}
       />
 
-      {/* Main Tab Content */}
       <main className="flex-1 relative overflow-hidden">
         {activeTab === 'map' && (
           <BattleMap
@@ -147,6 +158,7 @@ export default function App() {
             socket={socket}
             isDM={isDM}
             player={myPlayer}
+            onOpenSheet={() => handleTabChange('sheet')}
           />
         )}
 
@@ -179,7 +191,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'bestiary' && isDM && (
+        {activeTab === 'bestiary' && (
           <BestiaryDrawer
             socket={socket}
             room={room}

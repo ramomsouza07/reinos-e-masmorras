@@ -1,35 +1,37 @@
 import React, { useState } from 'react';
 import { 
-  Shield, 
   Sparkles, 
   Dices, 
   ChevronRight, 
   ChevronLeft, 
   Check, 
-  User, 
-  Heart, 
-  Zap, 
-  Crosshair,
-  Award
+  Sliders,
+  Wand2
 } from 'lucide-react';
-import { RACES, CLASSES, ABILITIES, ITEMS, getAbilityMod, formatMod } from '../data/dndData';
+import { 
+  RACES, 
+  CLASSES, 
+  ABILITIES, 
+  ITEMS, 
+  POINT_BUY_COSTS,
+  getAbilityMod, 
+  formatMod,
+  calculateCharacterDerivedStats
+} from '../data/dndData';
 import { roll4d6DropLowest } from '../utils/dice';
 import { sounds } from '../utils/soundEffects';
 
-const AVATARS = ['🧙‍♂️', '🧝‍♀️', '🧝‍♂️', '🧔‍♂️', '🦹', '👸', '🤴', '🧚', '🧛', '🧙‍♀️', '🏹', '⚔️', '🛡️', '⚡', '🐉', '🐺', '🦊', '🦅'];
-const COLORS = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16'];
+const AVATARS = ['⚔️', '🧙‍♂️', '🧝‍♀️', '🧔‍♂️', '🏹', '🛡️', '🦹', '👸', '🤴', '🧚', '🧛', '🧙‍♀️', '⚡', '🐉', '🐺', '🦊'];
+const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16', '#EF4444'];
 const ALIGNMENTS = [
   'Leal e Bom', 'Neutro e Bom', 'Caótico e Bom',
   'Leal e Neutro', 'Neutro Puro', 'Caótico e Neutro',
   'Leal e Mau', 'Neutro e Mau', 'Caótico e Mau'
 ];
 
-export const STANDARD_ARRAY = [15, 14, 13, 12, 10, 8];
-
 export default function CharacterCreator({ onComplete, onCancel }) {
   const [step, setStep] = useState(1);
 
-  // Character State
   const [name, setName] = useState('');
   const [selectedRace, setSelectedRace] = useState(RACES[0]);
   const [selectedClass, setSelectedClass] = useState(CLASSES[0]);
@@ -38,21 +40,33 @@ export default function CharacterCreator({ onComplete, onCancel }) {
   const [alignment, setAlignment] = useState(ALIGNMENTS[0]);
   const [backstory, setBackstory] = useState('');
 
-  // Ability generation mode: 'standard' | 'roll' | 'pointbuy'
-  const [statMode, setStatMode] = useState('standard');
+  // Attribute System Mode: 'pointbuy' | 'standard' | 'roll'
+  const [statMode, setStatMode] = useState('pointbuy');
   const [baseStats, setBaseStats] = useState({
     str: 15,
-    dex: 14,
-    con: 13,
-    int: 12,
-    wis: 10,
-    cha: 8
+    dex: 13,
+    con: 14,
+    int: 8,
+    wis: 12,
+    cha: 10
   });
+  const [rollDetails, setRollDetails] = useState({});
 
-  // 4d6 drop lowest rolls pool
-  const [rolledScores, setRolledScores] = useState([]);
+  // Calculate Point Buy spent (max 27 points)
+  const pointsSpent = Object.values(baseStats).reduce((acc, val) => {
+    const clamped = Math.max(8, Math.min(15, val));
+    return acc + (POINT_BUY_COSTS[clamped] ?? 0);
+  }, 0);
+  const pointsRemaining = 27 - pointsSpent;
 
-  // Calculate final ability scores with racial bonuses
+  // Apply Class Recommended Stats
+  const applyRecommendedStats = (cls = selectedClass) => {
+    if (cls.recommendedStats) {
+      setBaseStats({ ...cls.recommendedStats });
+    }
+  };
+
+  // Final stats including racial bonuses
   const finalStats = { ...baseStats };
   if (selectedRace.bonus) {
     Object.entries(selectedRace.bonus).forEach(([stat, val]) => {
@@ -60,58 +74,62 @@ export default function CharacterCreator({ onComplete, onCancel }) {
     });
   }
 
-  // Calculate starting HP & AC
   const conMod = getAbilityMod(finalStats.con);
-  const dexMod = getAbilityMod(finalStats.dex);
-  const startingHp = selectedClass.hitDie + conMod;
+  const startingHp = Math.max(6, selectedClass.hitDie + conMod);
 
-  // Roll 4d6 for all stats
+  // Build preview character for derived stats
+  const previewInventory = (selectedClass.starterGear || []).map(id => ITEMS[id]).filter(Boolean);
+  const derived = calculateCharacterDerivedStats({
+    classId: selectedClass.id,
+    level: 1,
+    stats: finalStats,
+    inventory: previewInventory
+  });
+
+  // Point Buy adjuster
+  const handlePointBuyChange = (statId, delta) => {
+    const current = baseStats[statId];
+    const next = current + delta;
+
+    if (statMode === 'pointbuy') {
+      if (next < 8 || next > 15) return;
+      const costDiff = POINT_BUY_COSTS[next] - POINT_BUY_COSTS[current];
+      if (costDiff > pointsRemaining) return;
+    } else {
+      if (next < 3 || next > 18) return;
+    }
+
+    setBaseStats(prev => ({ ...prev, [statId]: next }));
+  };
+
+  // Roll 4d6 drop lowest for all 6 stats
   const handleRollAllStats = () => {
     sounds.playDiceRoll();
     const newStats = {};
-    const rollsLog = [];
+    const details = {};
     ABILITIES.forEach(ab => {
-      const result = roll4d6DropLowest();
-      newStats[ab.id] = result.total;
-      rollsLog.push({ ab: ab.abbr, ...result });
+      const res = roll4d6DropLowest();
+      newStats[ab.id] = res.total;
+      details[ab.id] = res;
     });
+    setStatMode('roll');
     setBaseStats(newStats);
-    setRolledScores(rollsLog);
+    setRollDetails(details);
   };
 
   const handleFinish = () => {
-    if (!name.trim()) return;
-
-    // Build initial starter inventory
-    const inventory = [];
-    let initialAc = 10 + dexMod;
-
-    if (selectedClass.starterGear) {
-      selectedClass.starterGear.forEach(itemId => {
-        const item = ITEMS[itemId];
-        if (item) {
-          inventory.push(item);
-          // Calculate AC if armor or shield
-          if (item.type === 'armor') {
-            initialAc = item.ac + (item.addDex ? (item.maxDex ? Math.min(dexMod, item.maxDex) : dexMod) : 0);
-          }
-        }
-      });
-      // Check for shield in starter gear
-      if (selectedClass.starterGear.includes('escudo')) {
-        initialAc += 2;
-      }
-    }
+    const finalName = name.trim() || `${selectedClass.name} ${selectedRace.name}`;
 
     const newCharacter = {
       id: `char_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      name: name.trim(),
+      name: finalName,
       race: selectedRace.name,
       raceId: selectedRace.id,
       className: selectedClass.name,
       classId: selectedClass.id,
       level: 1,
       xp: 0,
+      unspentStatPoints: 0,
       avatar,
       color,
       alignment,
@@ -120,15 +138,13 @@ export default function CharacterCreator({ onComplete, onCancel }) {
       hp: startingHp,
       maxHp: startingHp,
       tempHp: 0,
-      ac: initialAc,
+      ac: derived.ac,
       speed: selectedRace.speed || 9,
       proficiencyBonus: 2,
       savingThrows: selectedClass.savingThrows || [],
       stats: finalStats,
-      gold: selectedClass.startingGold || 100,
-      silver: 0,
-      copper: 0,
-      inventory,
+      gold: selectedClass.startingGold || 120,
+      inventory: previewInventory,
       spellSlots: selectedClass.spellcaster ? { 1: { total: 2, current: 2 } } : null,
       deathSaves: { successes: 0, failures: 0 }
     };
@@ -148,25 +164,27 @@ export default function CharacterCreator({ onComplete, onCancel }) {
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="font-cinzel font-bold text-lg text-dnd-gold">Criação de Personagem (D&D 5e)</h2>
+              <h2 className="font-cinzel font-bold text-lg text-dnd-gold">Criação de Herói (D&D 5e)</h2>
               <p className="text-xs text-gray-400">Etapa {step} de 4: {
-                step === 1 ? 'Raça do Aventureiro' :
-                step === 2 ? 'Classe Heroica' :
-                step === 3 ? 'Atributos e Poderes' :
-                'Identidade e Personalização'
+                step === 1 ? 'Escolha de Raça e Bônus Raciais' :
+                step === 2 ? 'Escolha de Classe e Equipamento Inicial' :
+                step === 3 ? 'Sistema de Atributos (Compra de Pontos / Rolagem 4d6)' :
+                'Nome, Avatar e Identidade'
               }</p>
             </div>
           </div>
 
-          {/* Stepper Dots */}
           <div className="flex items-center space-x-2">
             {[1, 2, 3, 4].map(s => (
-              <div
+              <button
                 key={s}
-                className={`w-3 h-3 rounded-full transition-all ${
-                  step === s ? 'bg-dnd-gold scale-125' : s < step ? 'bg-emerald-500' : 'bg-gray-700'
+                onClick={() => setStep(s)}
+                className={`w-7 h-7 rounded-full text-xs font-bold transition-all ${
+                  step === s ? 'bg-dnd-gold text-black scale-110' : s < step ? 'bg-emerald-600 text-white' : 'bg-gray-800 text-gray-400'
                 }`}
-              />
+              >
+                {s}
+              </button>
             ))}
           </div>
         </div>
@@ -176,7 +194,7 @@ export default function CharacterCreator({ onComplete, onCancel }) {
           {/* STEP 1: RACE */}
           {step === 1 && (
             <div>
-              <h3 className="font-cinzel font-bold text-base text-gray-200 mb-4">Escolha a sua Raça</h3>
+              <h3 className="font-cinzel font-bold text-base text-gray-200 mb-3">1. Escolha a Raça do seu Personagem</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 {RACES.map(race => {
                   const isSelected = selectedRace.id === race.id;
@@ -186,16 +204,16 @@ export default function CharacterCreator({ onComplete, onCancel }) {
                       onClick={() => setSelectedRace(race)}
                       className={`cursor-pointer border rounded-xl p-4 transition text-left ${
                         isSelected 
-                          ? 'border-dnd-gold bg-dnd-gold/10 shadow-lg' 
+                          ? 'border-dnd-gold bg-dnd-gold/15 shadow-lg' 
                           : 'border-dnd-border bg-dnd-darker/60 hover:border-gray-500'
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center justify-between mb-1.5">
                         <span className="font-cinzel font-bold text-gray-100">{race.name}</span>
                         {isSelected && <Check className="w-4 h-4 text-dnd-gold" />}
                       </div>
-                      <p className="text-xs text-gray-400 mb-3">{race.description}</p>
-                      <div className="text-[11px] font-mono text-emerald-400 font-bold bg-emerald-950/40 p-1.5 rounded border border-emerald-900/60 mb-2">
+                      <p className="text-xs text-gray-400 mb-2.5">{race.description}</p>
+                      <div className="text-[11px] font-mono text-emerald-400 font-bold bg-emerald-950/50 p-1.5 rounded border border-emerald-800/60 mb-2">
                         Bônus: {Object.entries(race.bonus || {}).map(([k, v]) => `+${v} ${k.toUpperCase()}`).join(', ')}
                       </div>
                       <div className="text-[11px] text-gray-300 space-y-0.5">
@@ -213,32 +231,37 @@ export default function CharacterCreator({ onComplete, onCancel }) {
           {/* STEP 2: CLASS */}
           {step === 2 && (
             <div>
-              <h3 className="font-cinzel font-bold text-base text-gray-200 mb-4">Escolha a sua Classe</h3>
+              <h3 className="font-cinzel font-bold text-base text-gray-200 mb-3">2. Escolha sua Classe Heroica</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 {CLASSES.map(cls => {
                   const isSelected = selectedClass.id === cls.id;
                   return (
                     <div
                       key={cls.id}
-                      onClick={() => setSelectedClass(cls)}
+                      onClick={() => {
+                        setSelectedClass(cls);
+                        if (statMode === 'pointbuy' && cls.recommendedStats) {
+                          setBaseStats({ ...cls.recommendedStats });
+                        }
+                      }}
                       className={`cursor-pointer border rounded-xl p-4 transition text-left ${
                         isSelected 
-                          ? 'border-dnd-gold bg-dnd-gold/10 shadow-lg' 
+                          ? 'border-dnd-gold bg-dnd-gold/15 shadow-lg' 
                           : 'border-dnd-border bg-dnd-darker/60 hover:border-gray-500'
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center justify-between mb-1.5">
                         <div className="flex items-center space-x-1.5">
                           <span className="font-cinzel font-bold text-gray-100">{cls.name}</span>
                           <span className="text-[10px] bg-dnd-darker px-1.5 py-0.5 rounded font-mono text-amber-300 border border-dnd-border">
-                            d{cls.hitDie}
+                            Vida d{cls.hitDie}
                           </span>
                         </div>
                         {isSelected && <Check className="w-4 h-4 text-dnd-gold" />}
                       </div>
-                      <p className="text-xs text-gray-400 mb-3">{cls.description}</p>
+                      <p className="text-xs text-gray-400 mb-2.5">{cls.description}</p>
                       <div className="text-[11px] font-mono text-blue-400 font-bold bg-blue-950/40 p-1.5 rounded border border-blue-900/60 mb-2">
-                        Salvaguardas: {cls.savingThrows.map(s => s.toUpperCase()).join(' & ')}
+                        Atributo Principal: {cls.primary.toUpperCase()}
                       </div>
                       <div className="text-[11px] text-gray-300 space-y-0.5">
                         {cls.features.map((feat, i) => (
@@ -252,112 +275,191 @@ export default function CharacterCreator({ onComplete, onCancel }) {
             </div>
           )}
 
-          {/* STEP 3: ABILITY SCORES */}
+          {/* STEP 3: COMPREHENSIVE ATTRIBUTE SYSTEM */}
           {step === 3 && (
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="font-cinzel font-bold text-base text-gray-200">Definição dos Atributos</h3>
-                  <p className="text-xs text-gray-400">Atributos definem as capacidades heroicas do seu personagem no sistema D&D.</p>
-                </div>
+            <div className="space-y-5">
+              {/* Top Mode Selector */}
+              <div className="flex flex-wrap items-center justify-between gap-3 bg-dnd-darker border border-dnd-border rounded-xl p-3">
                 <div className="flex items-center space-x-2">
                   <button
-                    onClick={handleRollAllStats}
-                    className="flex items-center space-x-1.5 bg-dnd-gold hover:bg-amber-400 text-black px-3 py-1.5 rounded-lg text-xs font-bold transition shadow"
+                    type="button"
+                    onClick={() => {
+                      setStatMode('pointbuy');
+                      applyRecommendedStats();
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 ${
+                      statMode === 'pointbuy' ? 'bg-dnd-gold text-black shadow' : 'bg-dnd-panel text-gray-400 hover:text-white'
+                    }`}
                   >
-                    <Dices className="w-4 h-4" />
-                    <span>Rolar 4d6 (Soltar Menor)</span>
+                    <Sliders className="w-3.5 h-3.5" />
+                    <span>Compra de 27 Pontos</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleRollAllStats}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 ${
+                      statMode === 'roll' ? 'bg-dnd-gold text-black shadow' : 'bg-dnd-panel text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    <Dices className="w-3.5 h-3.5" />
+                    <span>Rolar 4d6 (Dados)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => applyRecommendedStats()}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-950/60 hover:bg-blue-900 text-blue-300 border border-blue-800 transition flex items-center space-x-1"
+                  >
+                    <Wand2 className="w-3.5 h-3.5" />
+                    <span>Ideal para {selectedClass.name}</span>
                   </button>
                 </div>
+
+                {statMode === 'pointbuy' && (
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs text-gray-400">Pontos Restantes:</span>
+                    <span className={`font-mono font-black text-base px-2.5 py-0.5 rounded-lg border ${
+                      pointsRemaining > 0
+                        ? 'bg-emerald-950 text-emerald-400 border-emerald-600'
+                        : 'bg-dnd-panel text-amber-400 border-dnd-border'
+                    }`}>
+                      {pointsRemaining} / 27
+                    </span>
+                  </div>
+                )}
               </div>
 
-              {/* Ability Scores Cards */}
-              <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
+              {/* 6 Attribute Cards with Detailed Breakdown */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 {ABILITIES.map(ab => {
-                  const baseVal = baseStats[ab.id];
-                  const bonus = selectedRace.bonus?.[ab.id] || 0;
-                  const finalVal = baseVal + bonus;
+                  const baseVal = baseStats[ab.id] || 10;
+                  const racialBonus = selectedRace.bonus?.[ab.id] || 0;
+                  const finalVal = baseVal + racialBonus;
                   const mod = getAbilityMod(finalVal);
+                  const isPrimary = selectedClass.primary === ab.id;
+                  const rDetail = rollDetails[ab.id];
 
                   return (
-                    <div key={ab.id} className="bg-dnd-darker border border-dnd-border rounded-xl p-3 text-center flex flex-col items-center">
-                      <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">{ab.abbr}</span>
-                      <span className="text-[10px] text-gray-500">{ab.name}</span>
-
-                      {/* Modifier Large */}
-                      <div className="my-2 text-2xl font-cinzel font-black text-dnd-gold">
-                        {formatMod(mod)}
+                    <div
+                      key={ab.id}
+                      className={`bg-dnd-darker border rounded-xl p-3.5 flex flex-col justify-between transition ${
+                        isPrimary ? 'border-dnd-gold shadow-md' : 'border-dnd-border'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center space-x-1.5">
+                            <span className="text-lg">{ab.icon}</span>
+                            <span className="font-cinzel font-bold text-sm text-gray-100">{ab.name} ({ab.abbr})</span>
+                          </div>
+                          {isPrimary && (
+                            <span className="text-[9px] bg-dnd-gold text-black font-black px-1.5 py-0.5 rounded uppercase">
+                              Principal
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-gray-400 mb-3">{ab.desc}</p>
                       </div>
 
-                      {/* Total Score */}
-                      <div className="text-sm font-mono font-bold text-gray-200 bg-dnd-panel px-3 py-1 rounded-full border border-dnd-border">
-                        {finalVal} {bonus > 0 && <span className="text-emerald-400 text-xs">+{bonus}</span>}
+                      {/* Score & Modifier Display */}
+                      <div className="flex items-center justify-between bg-dnd-panel border border-dnd-border rounded-xl p-2.5 my-1">
+                        <div>
+                          <div className="text-[10px] text-gray-400">
+                            Base {baseVal} {racialBonus > 0 && <span className="text-emerald-400 font-bold">+ {racialBonus} ({selectedRace.name})</span>}
+                          </div>
+                          <div className="text-xl font-mono font-black text-white">
+                            Total: {finalVal}
+                          </div>
+                          {statMode === 'roll' && rDetail && (
+                            <div className="text-[10px] font-mono text-amber-400">
+                              4d6: [{rDetail.rolls.join(', ')}] (soltou {rDetail.dropped})
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Big Modifier Badge */}
+                        <div className="text-center bg-dnd-darker border border-dnd-gold/60 px-3 py-1.5 rounded-xl">
+                          <div className="text-[9px] uppercase text-gray-400 font-bold">Modificador</div>
+                          <div className="text-xl font-cinzel font-black text-dnd-gold">
+                            {formatMod(mod)}
+                          </div>
+                        </div>
                       </div>
 
-                      {/* Base adjust */}
-                      <div className="flex items-center space-x-1 mt-2">
-                        <button
-                          onClick={() => setBaseStats(prev => ({ ...prev, [ab.id]: Math.max(3, prev[ab.id] - 1) }))}
-                          className="w-6 h-6 rounded bg-dnd-panel hover:bg-dnd-hover text-gray-300 text-xs font-bold"
-                        >
-                          -
-                        </button>
-                        <button
-                          onClick={() => setBaseStats(prev => ({ ...prev, [ab.id]: Math.min(18, prev[ab.id] + 1) }))}
-                          className="w-6 h-6 rounded bg-dnd-panel hover:bg-dnd-hover text-gray-300 text-xs font-bold"
-                        >
-                          +
-                        </button>
+                      {/* +/- Controls */}
+                      <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-dnd-border/50">
+                        <span className="text-[10px] text-gray-400">
+                          {statMode === 'pointbuy' ? `Custo: ${POINT_BUY_COSTS[Math.max(8, Math.min(15, baseVal))] || 0} pts` : 'Ajustar Valor:'}
+                        </span>
+                        <div className="flex items-center space-x-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handlePointBuyChange(ab.id, -1)}
+                            className="w-7 h-7 rounded-lg bg-dnd-panel hover:bg-red-950 border border-dnd-border text-gray-200 font-bold text-sm"
+                          >
+                            -
+                          </button>
+                          <span className="font-mono font-bold text-xs w-6 text-center">{baseVal}</span>
+                          <button
+                            type="button"
+                            onClick={() => handlePointBuyChange(ab.id, 1)}
+                            className="w-7 h-7 rounded-lg bg-dnd-panel hover:bg-emerald-950 border border-dnd-border text-gray-200 font-bold text-sm"
+                          >
+                            +
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
                 })}
               </div>
 
-              {/* Summary calculations */}
-              <div className="bg-dnd-panel border border-dnd-border rounded-xl p-4 grid grid-cols-3 gap-4 text-center">
+              {/* Derived Combat Statistics Preview */}
+              <div className="bg-dnd-panel border border-dnd-gold/40 rounded-xl p-4 grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
                 <div>
-                  <div className="text-xs text-gray-400">Pontos de Vida (PV)</div>
-                  <div className="text-xl font-mono font-bold text-emerald-400 mt-1">
-                    {startingHp} <span className="text-xs text-gray-500">(d{selectedClass.hitDie} + {conMod})</span>
-                  </div>
+                  <div className="text-[10px] uppercase font-bold text-gray-400">Pontos de Vida</div>
+                  <div className="text-lg font-cinzel font-black text-emerald-400">{startingHp} PV</div>
                 </div>
                 <div>
-                  <div className="text-xs text-gray-400">Classe de Armadura (CA)</div>
-                  <div className="text-xl font-mono font-bold text-blue-400 mt-1">
-                    {10 + dexMod} <span className="text-xs text-gray-500">(Base + DES)</span>
-                  </div>
+                  <div className="text-[10px] uppercase font-bold text-gray-400">Armadura (CA)</div>
+                  <div className="text-lg font-cinzel font-black text-blue-400">{derived.ac}</div>
                 </div>
                 <div>
-                  <div className="text-xs text-gray-400">Deslocamento</div>
-                  <div className="text-xl font-mono font-bold text-amber-400 mt-1">
-                    {selectedRace.speed}m <span className="text-xs text-gray-500">({selectedRace.speed / 1.5}q)</span>
-                  </div>
+                  <div className="text-[10px] uppercase font-bold text-gray-400">Ataque Corpo-a-Corpo</div>
+                  <div className="text-lg font-cinzel font-black text-amber-400">{formatMod(derived.meleeAtkBonus)}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase font-bold text-gray-400">Ataque à Distância</div>
+                  <div className="text-lg font-cinzel font-black text-amber-400">{formatMod(derived.rangedAtkBonus)}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase font-bold text-gray-400">Carga Máxima</div>
+                  <div className="text-lg font-cinzel font-black text-purple-400">{derived.carryCapacity} kg</div>
                 </div>
               </div>
             </div>
           )}
 
-          {/* STEP 4: IDENTITY & FINALIZE */}
+          {/* STEP 4: IDENTITY */}
           {step === 4 && (
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1.5">
-                  Nome do Personagem *
+                  Nome do Seu Herói
                 </label>
                 <input
                   type="text"
                   value={name}
                   onChange={e => setName(e.target.value)}
-                  placeholder="Ex: Bruenor Martelo-de-Guerra, Valeros, Lyra..."
+                  placeholder="Ex: Bruenor, Valeros, Lyra, Kaelen..."
                   className="w-full bg-dnd-darker border border-dnd-border rounded-lg px-4 py-2.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-dnd-gold"
                 />
               </div>
 
-              {/* Avatar Selector */}
               <div>
                 <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1.5">
-                  Avatar / Ícone do Token
+                  Ícone do Token no Mapa
                 </label>
                 <div className="flex flex-wrap gap-2">
                   {AVATARS.map(av => (
@@ -375,12 +477,11 @@ export default function CharacterCreator({ onComplete, onCancel }) {
                 </div>
               </div>
 
-              {/* Token Color */}
               <div>
                 <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1.5">
-                  Cor da Borda no Mapa
+                  Cor do Token
                 </label>
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center space-x-2.5">
                   {COLORS.map(c => (
                     <button
                       key={c}
@@ -395,7 +496,6 @@ export default function CharacterCreator({ onComplete, onCancel }) {
                 </div>
               </div>
 
-              {/* Alignment */}
               <div>
                 <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1.5">
                   Alinhamento Moral
@@ -410,25 +510,11 @@ export default function CharacterCreator({ onComplete, onCancel }) {
                   ))}
                 </select>
               </div>
-
-              {/* Backstory */}
-              <div>
-                <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1.5">
-                  História / Origem (Opcional)
-                </label>
-                <textarea
-                  value={backstory}
-                  onChange={e => setBackstory(e.target.value)}
-                  rows={3}
-                  placeholder="De onde você vem? Qual seu objetivo nessa aventura?"
-                  className="w-full bg-dnd-darker border border-dnd-border rounded-lg p-3 text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-dnd-gold"
-                />
-              </div>
             </div>
           )}
         </div>
 
-        {/* Wizard Footer Controls */}
+        {/* Footer */}
         <div className="bg-dnd-darker border-t border-dnd-border px-6 py-4 flex items-center justify-between">
           {step > 1 ? (
             <button
@@ -452,21 +538,16 @@ export default function CharacterCreator({ onComplete, onCancel }) {
               onClick={() => setStep(s => s + 1)}
               className="flex items-center space-x-1.5 bg-dnd-gold hover:bg-amber-400 text-black text-xs font-bold px-5 py-2.5 rounded-lg transition shadow-md"
             >
-              <span>Avançar</span>
+              <span>Próximo Passo</span>
               <ChevronRight className="w-4 h-4" />
             </button>
           ) : (
             <button
               onClick={handleFinish}
-              disabled={!name.trim()}
-              className={`flex items-center space-x-1.5 text-xs font-bold px-6 py-2.5 rounded-lg transition shadow-md ${
-                name.trim()
-                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                  : 'bg-gray-700 text-gray-400 cursor-not-allowed'
-              }`}
+              className="flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-6 py-2.5 rounded-lg transition shadow-md"
             >
               <Check className="w-4 h-4" />
-              <span>Concluir e Entrar no Jogo!</span>
+              <span>Concluir Herói!</span>
             </button>
           )}
         </div>

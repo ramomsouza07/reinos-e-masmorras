@@ -4,32 +4,41 @@ import {
   Shield, 
   Zap, 
   Award, 
-  Dices, 
   Sparkles, 
   Sword, 
   Plus, 
   Minus, 
   Moon, 
   Sun, 
-  Package, 
-  Crosshair,
-  Flame,
-  CheckCircle2,
-  XCircle,
-  Coins
+  Coins,
+  TrendingUp,
+  Sliders
 } from 'lucide-react';
-import { ABILITIES, SKILLS, getAbilityMod, formatMod, SPELLS } from '../data/dndData';
+import { 
+  ABILITIES, 
+  SKILLS, 
+  SPELLS, 
+  LEVEL_XP_TABLE,
+  getAbilityMod, 
+  formatMod,
+  calculateCharacterDerivedStats
+} from '../data/dndData';
 import { rollD20, parseDiceFormula } from '../utils/dice';
 import { sounds } from '../utils/soundEffects';
 
 export default function CharacterSheet({ character, onUpdate, socket, room }) {
-  const [activeTab, setActiveTab] = useState('combat'); // 'combat' | 'skills' | 'spells' | 'inventory'
-  const [advantageType, setAdvantageType] = useState('normal'); // 'normal' | 'advantage' | 'disadvantage'
+  const [activeTab, setActiveTab] = useState('attributes'); // 'attributes' | 'combat' | 'skills' | 'spells' | 'inventory'
+  const [advantageType, setAdvantageType] = useState('normal');
+  const [editStatsMode, setEditStatsMode] = useState(false);
 
   if (!character) return null;
 
-  const profBonus = character.proficiencyBonus || 2;
   const stats = character.stats || { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 };
+  const derived = calculateCharacterDerivedStats(character);
+  const profBonus = derived.profBonus;
+  const currentLvl = character.level || 1;
+  const nextLvlXp = LEVEL_XP_TABLE[currentLvl + 1] || (currentLvl * 1000);
+  const unspentPoints = character.unspentStatPoints || 0;
 
   // HP adjustments
   const adjustHp = (delta) => {
@@ -40,15 +49,63 @@ export default function CharacterSheet({ character, onUpdate, socket, room }) {
     onUpdate(updated);
   };
 
+  // Spend unspent attribute point or edit attribute
+  const handleModifyAttribute = (statId, delta) => {
+    const currentVal = stats[statId] || 10;
+    if (delta > 0 && unspentPoints > 0 && !editStatsMode) {
+      if (currentVal >= 20) return;
+      const newStats = { ...stats, [statId]: currentVal + 1 };
+      let newMaxHp = character.maxHp;
+      let newHp = character.hp;
+      if (statId === 'con' && (currentVal + 1) % 2 === 0) {
+        newMaxHp += currentLvl;
+        newHp += currentLvl;
+      }
+      sounds.playCriticalSuccess();
+      onUpdate({
+        ...character,
+        stats: newStats,
+        maxHp: newMaxHp,
+        hp: newHp,
+        unspentStatPoints: unspentPoints - 1
+      });
+    } else if (editStatsMode) {
+      const nextVal = Math.max(3, Math.min(20, currentVal + delta));
+      const newStats = { ...stats, [statId]: nextVal };
+      onUpdate({ ...character, stats: newStats });
+    }
+  };
+
+  // Manual Level Up button
+  const handleManualLevelUp = () => {
+    sounds.playCriticalSuccess();
+    const newLvl = currentLvl + 1;
+    const conMod = getAbilityMod(stats.con);
+    const hpGain = Math.max(4, Math.floor((character.hitDie || 8) / 2) + 1 + conMod);
+    const updated = {
+      ...character,
+      level: newLvl,
+      maxHp: (character.maxHp || 10) + hpGain,
+      hp: (character.maxHp || 10) + hpGain,
+      unspentStatPoints: (character.unspentStatPoints || 0) + 2
+    };
+    onUpdate(updated);
+
+    socket.emit('chat:send', {
+      sender: character.name,
+      senderType: 'player',
+      type: 'narration',
+      content: `🎉 **${character.name}** avançou para o **Nível ${newLvl}**! Ganhou +${hpGain} PV máximos e +2 Pontos de Atributo!`
+    });
+  };
+
   // Roll ability check or saving throw
   const handleRollCheck = (name, mod, isSave = false) => {
     sounds.playDiceRoll();
     const result = rollD20(mod, advantageType);
-    
     if (result.isNat20) sounds.playCriticalSuccess();
     else if (result.isNat1) sounds.playCriticalFail();
 
-    // Broadcast roll to chat
     socket.emit('chat:send', {
       sender: character.name,
       senderType: 'player',
@@ -65,122 +122,24 @@ export default function CharacterSheet({ character, onUpdate, socket, room }) {
   const handleWeaponAttack = (weapon) => {
     sounds.playAttack();
     const isFinesse = weapon.properties?.includes('Finesse');
-    const isRanged = weapon.properties?.some(p => p.includes('Munição') || p.includes('Arremesso'));
+    const isRanged = (weapon.range || 1.5) > 3;
     const useDex = isRanged || (isFinesse && stats.dex > stats.str);
     const mod = getAbilityMod(useDex ? stats.dex : stats.str) + profBonus;
 
     const result = rollD20(mod, advantageType);
-    if (result.isNat20) sounds.playCriticalSuccess();
-    else if (result.isNat1) sounds.playCriticalFail();
+    const parsedDmg = parseDiceFormula(weapon.damage || '1d8');
+    const dmgMod = getAbilityMod(useDex ? stats.dex : stats.str);
+    const totalDmg = Math.max(1, (parsedDmg?.total || 4) + dmgMod);
 
     socket.emit('chat:send', {
       sender: character.name,
       senderType: 'player',
       type: 'roll',
-      content: `ataca com **${weapon.name}**! Jogada de Ataque: **${result.total}** vs CA`,
+      content: `⚔️ ataca com **${weapon.name}**! Ataque: **${result.total}** vs CA | Dano: **${totalDmg}** ${weapon.damageType || ''}`,
       rollData: {
-        title: `Ataque: ${weapon.name}`,
+        title: `${weapon.name} (Ataque: ${result.total} | Dano: ${totalDmg})`,
         ...result
       }
-    });
-  };
-
-  // Roll weapon damage
-  const handleWeaponDamage = (weapon) => {
-    sounds.playAttack();
-    const isFinesse = weapon.properties?.includes('Finesse');
-    const isRanged = weapon.properties?.some(p => p.includes('Munição') || p.includes('Arremesso'));
-    const useDex = isRanged || (isFinesse && stats.dex > stats.str);
-    const statMod = getAbilityMod(useDex ? stats.dex : stats.str);
-
-    const dmgFormula = weapon.damage || '1d6';
-    const parsed = parseDiceFormula(dmgFormula);
-    const totalDmg = Math.max(1, (parsed?.total || 1) + statMod);
-
-    socket.emit('chat:send', {
-      sender: character.name,
-      senderType: 'player',
-      type: 'roll',
-      content: `acertou o golpe! Dano de **${weapon.name}**: **${totalDmg}** de dano ${weapon.damageType || ''} (${parsed?.rolls.join('+')} ${formatMod(statMod)})`,
-      rollData: {
-        title: `Dano: ${weapon.name}`,
-        total: totalDmg,
-        rolls: parsed?.rolls,
-        mod: statMod
-      }
-    });
-  };
-
-  // Cast Spell
-  const handleCastSpell = (spell) => {
-    sounds.playSpell();
-    let dmgTotal = null;
-    let healTotal = null;
-
-    if (spell.damage) {
-      const parsed = parseDiceFormula(spell.damage);
-      dmgTotal = parsed?.total;
-    } else if (spell.heal) {
-      const parsed = parseDiceFormula('1d8');
-      const mod = getAbilityMod(stats.wis || stats.int || 10);
-      healTotal = (parsed?.total || 1) + mod;
-    }
-
-    // Deduct spell slot if 1st level or higher
-    if (spell.level > 0 && character.spellSlots?.[spell.level]) {
-      const current = character.spellSlots[spell.level].current;
-      if (current > 0) {
-        const updated = {
-          ...character,
-          spellSlots: {
-            ...character.spellSlots,
-            [spell.level]: { ...character.spellSlots[spell.level], current: current - 1 }
-          }
-        };
-        onUpdate(updated);
-      }
-    }
-
-    socket.emit('chat:send', {
-      sender: character.name,
-      senderType: 'player',
-      type: 'roll',
-      content: `lança **${spell.name}** (${spell.level === 0 ? 'Truque' : `Círculo ${spell.level}`})! ${
-        dmgTotal ? `Dano: **${dmgTotal}** ${spell.damageType}` : ''
-      }${healTotal ? `Cura: **+${healTotal} PV**` : ''}`,
-      rollData: {
-        title: `Magia: ${spell.name}`,
-        total: dmgTotal || healTotal,
-        desc: spell.desc
-      }
-    });
-  };
-
-  // Use potion
-  const handleUsePotion = (itemIndex) => {
-    const item = character.inventory?.[itemIndex];
-    if (!item) return;
-
-    sounds.playHeal();
-    let healAmount = 7;
-    if (item.id === 'pocao_cura') healAmount = Math.floor(Math.random() * 8) + 4; // 2d4+2
-    else if (item.id === 'pocao_cura_maior') healAmount = Math.floor(Math.random() * 16) + 8; // 4d4+4
-
-    const newHp = Math.min(character.maxHp, character.hp + healAmount);
-    const newInventory = [...character.inventory];
-    newInventory.splice(itemIndex, 1);
-
-    onUpdate({
-      ...character,
-      hp: newHp,
-      inventory: newInventory
-    });
-
-    socket.emit('chat:send', {
-      sender: character.name,
-      senderType: 'player',
-      type: 'chat',
-      content: `bebeu **${item.name}** e recuperou **+${healAmount} PV**! (PV atual: ${newHp}/${character.maxHp})`
     });
   };
 
@@ -188,17 +147,16 @@ export default function CharacterSheet({ character, onUpdate, socket, room }) {
   const handleShortRest = () => {
     sounds.playHeal();
     const conMod = getAbilityMod(stats.con);
-    const dieRoll = Math.floor(Math.random() * character.hitDie) + 1;
-    const heal = Math.max(1, dieRoll + conMod);
+    const dieRoll = Math.floor(Math.random() * (character.hitDie || 8)) + 1;
+    const heal = Math.max(2, dieRoll + conMod);
     const newHp = Math.min(character.maxHp, character.hp + heal);
 
     onUpdate({ ...character, hp: newHp });
-
     socket.emit('chat:send', {
       sender: character.name,
       senderType: 'player',
       type: 'chat',
-      content: `completou um **Descanso Curto** (1h), gastou um Dado de Vida (d${character.hitDie} + ${conMod}) e recuperou **+${heal} PV**!`
+      content: `🌙 completou um **Descanso Curto** e recuperou **+${heal} PV**! (${newHp}/${character.maxHp} PV)`
     });
   };
 
@@ -211,88 +169,63 @@ export default function CharacterSheet({ character, onUpdate, socket, room }) {
       tempHp: 0,
       deathSaves: { successes: 0, failures: 0 }
     };
-    if (updated.spellSlots) {
-      Object.keys(updated.spellSlots).forEach(lvl => {
-        updated.spellSlots[lvl].current = updated.spellSlots[lvl].total;
-      });
-    }
-
     onUpdate(updated);
-
     socket.emit('chat:send', {
       sender: character.name,
       senderType: 'player',
       type: 'chat',
-      content: `completou um **Descanso Longo** (8h)! Recuperou todos os seus **${character.maxHp} Pontos de Vida** e todos os espaços de magia.`
-    });
-  };
-
-  // Death Save roll
-  const handleDeathSave = () => {
-    sounds.playDiceRoll();
-    const roll = Math.floor(Math.random() * 20) + 1;
-    const current = character.deathSaves || { successes: 0, failures: 0 };
-    let newS = current.successes;
-    let newF = current.failures;
-
-    if (roll === 20) {
-      sounds.playCriticalSuccess();
-      onUpdate({ ...character, hp: 1, deathSaves: { successes: 0, failures: 0 } });
-      socket.emit('chat:send', {
-        sender: character.name,
-        senderType: 'player',
-        type: 'roll',
-        content: `ROLOU 20 NATURAL NA SALVAGUARDA CONTRA A MORTE! Volta à vida com 1 PV! 🎉`
-      });
-      return;
-    } else if (roll === 1) {
-      sounds.playCriticalFail();
-      newF += 2;
-    } else if (roll >= 10) {
-      newS += 1;
-    } else {
-      newF += 1;
-    }
-
-    onUpdate({ ...character, deathSaves: { successes: newS, failures: newF } });
-
-    socket.emit('chat:send', {
-      sender: character.name,
-      senderType: 'player',
-      type: 'roll',
-      content: `rolou Salvaguarda contra a Morte: **${roll}** (${roll >= 10 ? 'SUCESSO' : 'FALHA'})! [Sucessos: ${newS}/3 | Falhas: ${newF}/3]`
+      content: `☀️ completou um **Descanso Longo** (8h) e restaurou todos os **${character.maxHp} PV** e energias!`
     });
   };
 
   return (
     <div className="h-[calc(100vh-3.5rem)] overflow-y-auto bg-dnd-darker text-gray-200 p-4 select-none">
-      <div className="max-w-4xl mx-auto space-y-4">
+      <div className="max-w-5xl mx-auto space-y-4">
         
         {/* CHARACTER HEADER */}
         <div className="bg-dnd-panel border border-dnd-border rounded-2xl p-4 shadow-xl flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center space-x-3.5">
-            <div className="w-14 h-14 rounded-2xl bg-dnd-darker border-2 border-dnd-gold flex items-center justify-center text-3xl shadow-inner">
-              {character.avatar || '🛡️'}
+            <div className="w-16 h-16 rounded-2xl bg-dnd-darker border-2 border-dnd-gold flex items-center justify-center text-3xl shadow-inner">
+              {character.avatar || '⚔️'}
             </div>
             <div>
               <div className="flex items-center space-x-2">
                 <h2 className="font-cinzel font-black text-xl text-dnd-gold">{character.name}</h2>
-                <span className="text-xs bg-dnd-darker px-2 py-0.5 rounded font-mono text-gray-300 border border-dnd-border">
-                  Nv. {character.level || 1}
+                <span className="text-xs bg-dnd-gold text-black font-bold px-2 py-0.5 rounded">
+                  Nível {currentLvl}
                 </span>
               </div>
-              <p className="text-xs text-gray-400">
+              <p className="text-xs text-gray-400 mt-0.5">
                 {character.race} • {character.className} • {character.alignment}
               </p>
+              {/* XP Bar */}
+              <div className="flex items-center space-x-2 mt-1.5">
+                <div className="w-36 h-2 bg-dnd-darker rounded-full overflow-hidden border border-dnd-border">
+                  <div
+                    className="h-full bg-amber-400"
+                    style={{ width: `${Math.min(100, ((character.xp || 0) / nextLvlXp) * 100)}%` }}
+                  />
+                </div>
+                <span className="text-[10px] font-mono text-amber-400">
+                  {character.xp || 0} / {nextLvlXp} XP
+                </span>
+              </div>
             </div>
           </div>
 
-          {/* Rest Buttons */}
-          <div className="flex items-center space-x-2">
+          {/* Right Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleManualLevelUp}
+              className="flex items-center space-x-1 bg-purple-900/80 hover:bg-purple-800 border border-purple-500 text-purple-200 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow"
+              title="Avançar nível do personagem (+PV e +2 Pontos de Atributo)"
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+              <span>Evoluir Nível</span>
+            </button>
             <button
               onClick={handleShortRest}
               className="flex items-center space-x-1.5 bg-dnd-darker hover:bg-dnd-hover border border-dnd-border px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-300 transition"
-              title="Descanso Curto (1 hora): Cura gastando Dado de Vida"
             >
               <Moon className="w-3.5 h-3.5 text-blue-400" />
               <span>Descanso Curto</span>
@@ -300,7 +233,6 @@ export default function CharacterSheet({ character, onUpdate, socket, room }) {
             <button
               onClick={handleLongRest}
               className="flex items-center space-x-1.5 bg-dnd-gold/20 hover:bg-dnd-gold/30 border border-dnd-gold text-amber-300 px-3 py-1.5 rounded-lg text-xs font-semibold transition"
-              title="Descanso Longo (8 horas): Recupera todo PV e Magias"
             >
               <Sun className="w-3.5 h-3.5 text-amber-400" />
               <span>Descanso Longo</span>
@@ -308,399 +240,293 @@ export default function CharacterSheet({ character, onUpdate, socket, room }) {
           </div>
         </div>
 
-        {/* VITALS ROW (HP, AC, Speed, Initiative, Proficiency) */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          {/* HP Card */}
-          <div className="col-span-2 bg-dnd-panel border border-dnd-border rounded-xl p-3 shadow flex flex-col justify-between">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-gray-400 uppercase flex items-center gap-1">
-                <Heart className="w-4 h-4 text-red-500 fill-red-500" /> Pontos de Vida
-              </span>
-              <span className="text-xs font-mono text-gray-400">Max: {character.maxHp}</span>
-            </div>
-
-            <div className="my-2 flex items-baseline space-x-2">
-              <span className="text-3xl font-cinzel font-black text-emerald-400">{character.hp}</span>
-              <span className="text-sm font-mono text-gray-500">/ {character.maxHp}</span>
-            </div>
-
-            {/* HP progress bar */}
-            <div className="w-full h-2 bg-dnd-darker rounded-full overflow-hidden mb-2 border border-dnd-border">
-              <div
-                className={`h-full transition-all duration-300 ${
-                  (character.hp / character.maxHp) > 0.5 ? 'bg-emerald-500' : 'bg-red-500'
-                }`}
-                style={{ width: `${Math.max(0, Math.min(100, (character.hp / character.maxHp) * 100))}%` }}
-              />
-            </div>
-
-            {/* Quick adjust buttons */}
-            <div className="flex items-center space-x-1">
-              <button
-                onClick={() => adjustHp(-5)}
-                className="flex-1 py-1 bg-red-950/70 hover:bg-red-900 border border-red-800 text-red-300 text-xs font-bold rounded"
-              >
-                -5
-              </button>
-              <button
-                onClick={() => adjustHp(-1)}
-                className="flex-1 py-1 bg-red-950/70 hover:bg-red-900 border border-red-800 text-red-300 text-xs font-bold rounded"
-              >
-                -1
-              </button>
-              <button
-                onClick={() => adjustHp(1)}
-                className="flex-1 py-1 bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-800 text-emerald-300 text-xs font-bold rounded"
-              >
-                +1
-              </button>
-              <button
-                onClick={() => adjustHp(5)}
-                className="flex-1 py-1 bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-800 text-emerald-300 text-xs font-bold rounded"
-              >
-                +5
-              </button>
-            </div>
-          </div>
-
-          {/* AC */}
-          <div className="bg-dnd-panel border border-dnd-border rounded-xl p-3 text-center flex flex-col justify-center items-center shadow">
-            <Shield className="w-5 h-5 text-blue-400 mb-1" />
-            <span className="text-[10px] uppercase font-bold text-gray-400">Armadura (CA)</span>
-            <span className="text-2xl font-cinzel font-black text-blue-400 mt-1">{character.ac}</span>
-          </div>
-
-          {/* Initiative */}
-          <div 
-            onClick={() => handleRollCheck('Iniciativa', getAbilityMod(stats.dex))}
-            className="cursor-pointer bg-dnd-panel border border-dnd-border hover:border-dnd-gold rounded-xl p-3 text-center flex flex-col justify-center items-center shadow transition group"
-            title="Clique para rolar Iniciativa"
-          >
-            <Zap className="w-5 h-5 text-amber-400 mb-1 group-hover:scale-110 transition" />
-            <span className="text-[10px] uppercase font-bold text-gray-400">Iniciativa</span>
-            <span className="text-2xl font-cinzel font-black text-amber-400 mt-1">
-              {formatMod(getAbilityMod(stats.dex))}
-            </span>
-          </div>
-
-          {/* Speed & Prof */}
-          <div className="bg-dnd-panel border border-dnd-border rounded-xl p-3 text-center flex flex-col justify-center items-center shadow">
-            <Award className="w-5 h-5 text-purple-400 mb-1" />
-            <span className="text-[10px] uppercase font-bold text-gray-400">Proficiência</span>
-            <span className="text-2xl font-cinzel font-black text-purple-400 mt-1">+{profBonus}</span>
-          </div>
-        </div>
-
-        {/* DEATH SAVES (Shows if HP <= 0) */}
-        {character.hp <= 0 && (
-          <div className="bg-red-950/80 border-2 border-red-600 rounded-xl p-4 shadow-xl animate-pulse">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center space-x-2">
-                <span className="text-2xl">💀</span>
-                <div>
-                  <h4 className="font-cinzel font-bold text-red-200 text-sm">TESTES CONTRA A MORTE</h4>
-                  <p className="text-xs text-red-300">Seu herói caiu! Role d20 (10+ sucesso, 3 sucessos estabiliza, 3 falhas morre)</p>
-                </div>
-              </div>
-              <button
-                onClick={handleDeathSave}
-                className="bg-red-700 hover:bg-red-600 text-white font-bold text-xs px-4 py-2 rounded-lg shadow transition"
-              >
-                Rolar Salvaguarda (d20)
-              </button>
-            </div>
-
-            <div className="flex items-center justify-around text-xs">
-              <div className="flex items-center space-x-2">
-                <span className="font-bold text-emerald-400">Sucessos:</span>
-                {[1, 2, 3].map(i => (
-                  <span key={i} className={`text-base ${i <= (character.deathSaves?.successes || 0) ? 'text-emerald-400' : 'text-gray-600'}`}>
-                    ●
-                  </span>
-                ))}
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="font-bold text-red-400">Falhas:</span>
-                {[1, 2, 3].map(i => (
-                  <span key={i} className={`text-base ${i <= (character.deathSaves?.failures || 0) ? 'text-red-500' : 'text-gray-600'}`}>
-                    ●
-                  </span>
-                ))}
+        {/* UNSPENT ATTRIBUTE POINTS BANNER */}
+        {unspentPoints > 0 && (
+          <div className="bg-emerald-950/80 border-2 border-emerald-500 rounded-2xl p-3.5 flex items-center justify-between shadow-lg animate-pulse">
+            <div className="flex items-center space-x-2.5">
+              <Sparkles className="w-5 h-5 text-emerald-400" />
+              <div>
+                <h4 className="font-cinzel font-bold text-sm text-emerald-300">
+                  Você tem +{unspentPoints} Ponto(s) de Atributo para distribuir!
+                </h4>
+                <p className="text-xs text-emerald-200">
+                  Clique no botão "+1" em qualquer atributo abaixo para fortalecer seu herói permanentemente.
+                </p>
               </div>
             </div>
           </div>
         )}
 
-        {/* 6 ABILITY SCORES (CLICK TO ROLL) */}
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
-          {ABILITIES.map(ab => {
-            const val = stats[ab.id] || 10;
-            const mod = getAbilityMod(val);
-
-            return (
+        {/* VITALS ROW */}
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2.5">
+          {/* HP Card */}
+          <div className="col-span-2 bg-dnd-panel border border-dnd-border rounded-xl p-3 shadow flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-gray-400 uppercase flex items-center gap-1">
+                <Heart className="w-4 h-4 text-red-500 fill-red-500" /> Vida (PV)
+              </span>
+              <span className="text-lg font-cinzel font-black text-emerald-400">
+                {character.hp} / {character.maxHp}
+              </span>
+            </div>
+            <div className="w-full h-2 bg-dnd-darker rounded-full overflow-hidden my-2 border border-dnd-border">
               <div
-                key={ab.id}
-                onClick={() => handleRollCheck(ab.name, mod, false)}
-                className="cursor-pointer bg-dnd-panel border border-dnd-border hover:border-dnd-gold rounded-xl p-2.5 text-center transition group shadow"
-                title={`Clique para rolar Teste de ${ab.name}`}
-              >
-                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{ab.abbr}</div>
-                <div className="text-xl font-cinzel font-black text-dnd-gold group-hover:scale-110 transition my-0.5">
-                  {formatMod(mod)}
-                </div>
-                <div className="text-xs font-mono font-semibold text-gray-300 bg-dnd-darker py-0.5 rounded border border-dnd-border">
-                  {val}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* ADVANTAGE SELECTOR */}
-        <div className="flex items-center justify-center space-x-2 bg-dnd-panel/60 border border-dnd-border rounded-xl p-1.5">
-          <span className="text-xs font-bold text-gray-400 mr-2">Modo do D20:</span>
-          <button
-            onClick={() => setAdvantageType('normal')}
-            className={`px-3 py-1 rounded text-xs font-semibold transition ${
-              advantageType === 'normal' ? 'bg-dnd-gold text-black shadow' : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Normal
-          </button>
-          <button
-            onClick={() => setAdvantageType('advantage')}
-            className={`px-3 py-1 rounded text-xs font-semibold transition ${
-              advantageType === 'advantage' ? 'bg-emerald-600 text-white shadow' : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Vantagem
-          </button>
-          <button
-            onClick={() => setAdvantageType('disadvantage')}
-            className={`px-3 py-1 rounded text-xs font-semibold transition ${
-              advantageType === 'disadvantage' ? 'bg-red-700 text-white shadow' : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Desvantagem
-          </button>
-        </div>
-
-        {/* TABS (COMBATE / PERÍCIAS / MAGIAS / INVENTÁRIO) */}
-        <div className="bg-dnd-panel border border-dnd-border rounded-2xl overflow-hidden shadow-xl">
-          <div className="flex border-b border-dnd-border bg-dnd-darker/60 text-xs font-semibold">
-            <button
-              onClick={() => setActiveTab('combat')}
-              className={`flex-1 py-3 text-center border-b-2 transition ${
-                activeTab === 'combat' ? 'border-dnd-gold text-dnd-gold bg-dnd-panel font-bold' : 'border-transparent text-gray-400 hover:text-white'
-              }`}
-            >
-              Ataques & Ações
-            </button>
-            <button
-              onClick={() => setActiveTab('skills')}
-              className={`flex-1 py-3 text-center border-b-2 transition ${
-                activeTab === 'skills' ? 'border-dnd-gold text-dnd-gold bg-dnd-panel font-bold' : 'border-transparent text-gray-400 hover:text-white'
-              }`}
-            >
-              Perícias & Salvaguardas
-            </button>
-            <button
-              onClick={() => setActiveTab('spells')}
-              className={`flex-1 py-3 text-center border-b-2 transition ${
-                activeTab === 'spells' ? 'border-dnd-gold text-dnd-gold bg-dnd-panel font-bold' : 'border-transparent text-gray-400 hover:text-white'
-              }`}
-            >
-              Grimório & Magias
-            </button>
-            <button
-              onClick={() => setActiveTab('inventory')}
-              className={`flex-1 py-3 text-center border-b-2 transition ${
-                activeTab === 'inventory' ? 'border-dnd-gold text-dnd-gold bg-dnd-panel font-bold' : 'border-transparent text-gray-400 hover:text-white'
-              }`}
-            >
-              Mochila & Ouro ({character.gold || 0} PO)
-            </button>
+                className="h-full bg-emerald-500 transition-all"
+                style={{ width: `${Math.max(0, Math.min(100, (character.hp / character.maxHp) * 100))}%` }}
+              />
+            </div>
+            <div className="flex items-center space-x-1">
+              <button onClick={() => adjustHp(-5)} className="flex-1 py-1 bg-red-950 hover:bg-red-900 text-red-300 text-xs font-bold rounded">-5</button>
+              <button onClick={() => adjustHp(-1)} className="flex-1 py-1 bg-red-950 hover:bg-red-900 text-red-300 text-xs font-bold rounded">-1</button>
+              <button onClick={() => adjustHp(1)} className="flex-1 py-1 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 text-xs font-bold rounded">+1</button>
+              <button onClick={() => adjustHp(5)} className="flex-1 py-1 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 text-xs font-bold rounded">+5</button>
+            </div>
           </div>
 
-          <div className="p-4">
-            {/* COMBAT TAB */}
+          <div className="bg-dnd-panel border border-dnd-border rounded-xl p-3 text-center flex flex-col justify-center items-center shadow">
+            <Shield className="w-5 h-5 text-blue-400 mb-1" />
+            <span className="text-[10px] uppercase font-bold text-gray-400">Classe Armadura</span>
+            <span className="text-2xl font-cinzel font-black text-blue-400">{derived.ac}</span>
+          </div>
+
+          <div
+            onClick={() => handleRollCheck('Iniciativa', derived.initiative)}
+            className="cursor-pointer bg-dnd-panel border border-dnd-border hover:border-dnd-gold rounded-xl p-3 text-center flex flex-col justify-center items-center shadow"
+          >
+            <Zap className="w-5 h-5 text-amber-400 mb-1" />
+            <span className="text-[10px] uppercase font-bold text-gray-400">Iniciativa</span>
+            <span className="text-2xl font-cinzel font-black text-amber-400">{formatMod(derived.initiative)}</span>
+          </div>
+
+          <div className="bg-dnd-panel border border-dnd-border rounded-xl p-3 text-center flex flex-col justify-center items-center shadow">
+            <Award className="w-5 h-5 text-purple-400 mb-1" />
+            <span className="text-[10px] uppercase font-bold text-gray-400">Proficiência</span>
+            <span className="text-2xl font-cinzel font-black text-purple-400">+{profBonus}</span>
+          </div>
+
+          <div className="bg-dnd-panel border border-dnd-border rounded-xl p-3 text-center flex flex-col justify-center items-center shadow">
+            <Coins className="w-5 h-5 text-amber-400 mb-1" />
+            <span className="text-[10px] uppercase font-bold text-gray-400">Ouro (PO)</span>
+            <span className="text-2xl font-cinzel font-black text-amber-400">{character.gold || 0}</span>
+          </div>
+        </div>
+
+        {/* NAVIGATION TABS */}
+        <div className="bg-dnd-panel border border-dnd-border rounded-2xl overflow-hidden shadow-xl">
+          <div className="flex border-b border-dnd-border bg-dnd-darker/60 text-xs font-semibold">
+            {[
+              { id: 'attributes', label: '📊 Sistema de Atributos' },
+              { id: 'combat', label: '⚔️ Armas & Combate' },
+              { id: 'skills', label: '🎯 Perícias & Salvaguardas' },
+              { id: 'spells', label: '🔮 Magias' }
+            ].map(t => (
+              <button
+                key={t.id}
+                onClick={() => setActiveTab(t.id)}
+                className={`flex-1 py-3 text-center border-b-2 transition ${
+                  activeTab === t.id ? 'border-dnd-gold text-dnd-gold bg-dnd-panel font-bold' : 'border-transparent text-gray-400 hover:text-white'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="p-5">
+            {/* TAB 1: DETAILED ATTRIBUTE SYSTEM */}
+            {activeTab === 'attributes' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-cinzel font-bold text-base text-dnd-gold">Atributos Primários & Impacto em Jogo</h3>
+                    <p className="text-xs text-gray-400">Clique em qualquer atributo para rolar um Teste de Habilidade (1d20 + Modificador).</p>
+                  </div>
+                  <button
+                    onClick={() => setEditStatsMode(!editStatsMode)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border flex items-center space-x-1.5 transition ${
+                      editStatsMode
+                        ? 'bg-amber-500 text-black border-amber-400'
+                        : 'bg-dnd-darker text-gray-300 border-dnd-border hover:border-gray-500'
+                    }`}
+                  >
+                    <Sliders className="w-3.5 h-3.5" />
+                    <span>{editStatsMode ? 'Concluir Edição Livre' : 'Editar Atributos Manualmente'}</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                  {ABILITIES.map(ab => {
+                    const val = stats[ab.id] || 10;
+                    const mod = getAbilityMod(val);
+                    const hasSaveProf = character.savingThrows?.includes(ab.id);
+
+                    return (
+                      <div
+                        key={ab.id}
+                        className="bg-dnd-darker border border-dnd-border hover:border-dnd-gold/70 rounded-2xl p-4 flex flex-col justify-between shadow transition"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center space-x-2">
+                              <span className="text-2xl">{ab.icon}</span>
+                              <div>
+                                <h4 className="font-cinzel font-bold text-sm text-gray-100">{ab.name} ({ab.abbr})</h4>
+                                {hasSaveProf && (
+                                  <span className="text-[10px] text-emerald-400 font-semibold">★ Proficiente em Salvaguarda</span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Big Clickable Modifier */}
+                            <button
+                              onClick={() => handleRollCheck(ab.name, mod, false)}
+                              className="bg-dnd-panel hover:bg-dnd-gold hover:text-black border border-dnd-gold/60 px-3 py-1.5 rounded-xl text-center transition group"
+                              title={`Rolar Teste de ${ab.name}`}
+                            >
+                              <div className="text-[9px] uppercase opacity-75 font-bold">Rolar d20</div>
+                              <div className="text-xl font-cinzel font-black text-dnd-gold group-hover:text-black">
+                                {formatMod(mod)}
+                              </div>
+                            </button>
+                          </div>
+
+                          {/* Effects list */}
+                          <ul className="text-[11px] text-gray-400 space-y-1 my-2.5 pl-1">
+                            {ab.effects.map((ef, i) => (
+                              <li key={i}>• {ef}</li>
+                            ))}
+                          </ul>
+                        </div>
+
+                        {/* Bottom Value & Upgrade Bar */}
+                        <div className="pt-2.5 border-t border-dnd-border/60 flex items-center justify-between">
+                          <div className="text-xs font-mono">
+                            Valor Total: <span className="font-bold text-white text-sm">{val}</span> / 20
+                          </div>
+
+                          {(unspentPoints > 0 && !editStatsMode) && (
+                            <button
+                              onClick={() => handleModifyAttribute(ab.id, 1)}
+                              className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-1 rounded-lg shadow flex items-center space-x-1"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>Aumentar (+1)</span>
+                            </button>
+                          )}
+
+                          {editStatsMode && (
+                            <div className="flex items-center space-x-1.5">
+                              <button
+                                onClick={() => handleModifyAttribute(ab.id, -1)}
+                                className="w-7 h-7 rounded bg-dnd-panel hover:bg-red-950 border border-dnd-border text-white font-bold"
+                              >
+                                -
+                              </button>
+                              <button
+                                onClick={() => handleModifyAttribute(ab.id, 1)}
+                                className="w-7 h-7 rounded bg-dnd-panel hover:bg-emerald-950 border border-dnd-border text-white font-bold"
+                              >
+                                +
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Derived Statistics Summary Box */}
+                <div className="bg-dnd-darker border border-dnd-border rounded-xl p-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div>
+                    <span className="text-gray-400 block">Bônus Ataque Corpo-a-Corpo:</span>
+                    <span className="font-mono font-bold text-sm text-amber-400">{formatMod(derived.meleeAtkBonus)} (FOR + Prof)</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400 block">Bônus Ataque à Distância:</span>
+                    <span className="font-mono font-bold text-sm text-amber-400">{formatMod(derived.rangedAtkBonus)} (DES + Prof)</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400 block">CD de Resistência à Magia:</span>
+                    <span className="font-mono font-bold text-sm text-purple-400">CD {derived.spellSaveDC}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400 block">Percepção Passiva / Carga:</span>
+                    <span className="font-mono font-bold text-sm text-emerald-400">{derived.passivePerception} / {derived.carryCapacity} kg</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 2: COMBAT & WEAPONS */}
             {activeTab === 'combat' && (
               <div className="space-y-3">
                 <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Armas Equipadas</h4>
-                {(character.inventory || []).filter(i => i.type === 'weapon').map((w, idx) => {
-                  const isFinesse = w.properties?.includes('Finesse');
-                  const isRanged = w.properties?.some(p => p.includes('Munição') || p.includes('Arremesso'));
-                  const useDex = isRanged || (isFinesse && stats.dex > stats.str);
-                  const atkMod = getAbilityMod(useDex ? stats.dex : stats.str) + profBonus;
-                  const dmgMod = getAbilityMod(useDex ? stats.dex : stats.str);
+                {(character.inventory || []).filter(i => i.type === 'weapon').map((w, idx) => (
+                  <div key={idx} className="bg-dnd-darker border border-dnd-border rounded-xl p-3 flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-sm text-gray-100 flex items-center gap-1.5">
+                        <Sword className="w-4 h-4 text-dnd-gold" />
+                        <span>{w.name}</span>
+                      </div>
+                      <div className="text-xs text-gray-400 mt-0.5">
+                        Dano: {w.damage} {w.damageType} • Alcance: {w.range || 1.5}m • {w.properties?.join(', ')}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleWeaponAttack(w)}
+                      className="bg-dnd-gold hover:bg-amber-400 text-black px-4 py-2 rounded-lg text-xs font-bold transition shadow"
+                    >
+                      Rolar Ataque & Dano
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
 
+            {/* TAB 3: SKILLS & SAVES */}
+            {activeTab === 'skills' && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {SKILLS.map(sk => {
+                  const mod = getAbilityMod(stats[sk.ability]);
                   return (
-                    <div key={idx} className="bg-dnd-darker border border-dnd-border rounded-xl p-3 flex items-center justify-between">
-                      <div>
-                        <div className="font-bold text-sm text-gray-100 flex items-center gap-1.5">
-                          <Sword className="w-4 h-4 text-dnd-gold" />
-                          <span>{w.name}</span>
-                        </div>
-                        <div className="text-xs text-gray-400 mt-0.5">
-                          Dano: {w.damage} {formatMod(dmgMod)} {w.damageType} • {w.properties?.join(', ')}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={() => handleWeaponAttack(w)}
-                          className="bg-dnd-gold hover:bg-amber-400 text-black px-3 py-1.5 rounded-lg text-xs font-bold transition shadow"
-                        >
-                          Atacar ({formatMod(atkMod)})
-                        </button>
-                        <button
-                          onClick={() => handleWeaponDamage(w)}
-                          className="bg-red-900/80 hover:bg-red-800 text-red-200 border border-red-700 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow"
-                        >
-                          Dano
-                        </button>
-                      </div>
+                    <div
+                      key={sk.id}
+                      onClick={() => handleRollCheck(sk.name, mod, false)}
+                      className="cursor-pointer bg-dnd-darker border border-dnd-border hover:border-dnd-gold rounded-lg px-3 py-2 text-xs flex items-center justify-between transition"
+                    >
+                      <span className="text-gray-200">
+                        {sk.name} <span className="text-[10px] text-gray-500 font-mono">({sk.ability.toUpperCase()})</span>
+                      </span>
+                      <span className="font-mono font-bold text-dnd-gold">{formatMod(mod)}</span>
                     </div>
                   );
                 })}
-
-                {/* Class Features */}
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mt-4 mb-2">Habilidades de Classe</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                  <div className="bg-dnd-darker border border-dnd-border rounded-lg p-2.5">
-                    <span className="font-bold text-dnd-gold">Dado de Vida:</span> 1d{character.hitDie} por nível
-                  </div>
-                  <div className="bg-dnd-darker border border-dnd-border rounded-lg p-2.5">
-                    <span className="font-bold text-dnd-gold">Deslocamento:</span> {character.speed}m ({character.speed / 1.5} quadrados)
-                  </div>
-                </div>
               </div>
             )}
 
-            {/* SKILLS TAB */}
-            {activeTab === 'skills' && (
-              <div className="space-y-4">
-                {/* Saving Throws */}
-                <div>
-                  <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Salvaguardas</h4>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {ABILITIES.map(ab => {
-                      const isProf = character.savingThrows?.includes(ab.id);
-                      const mod = getAbilityMod(stats[ab.id]) + (isProf ? profBonus : 0);
-                      return (
-                        <div
-                          key={ab.id}
-                          onClick={() => handleRollCheck(ab.name, mod, true)}
-                          className={`cursor-pointer border rounded-lg p-2 text-xs flex items-center justify-between transition ${
-                            isProf ? 'bg-amber-950/30 border-dnd-gold' : 'bg-dnd-darker border-dnd-border hover:border-gray-500'
-                          }`}
-                        >
-                          <span className="font-medium text-gray-200">{ab.name}</span>
-                          <span className="font-mono font-bold text-dnd-gold">{formatMod(mod)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Skills */}
-                <div>
-                  <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Perícias D&D 5e</h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    {SKILLS.map(sk => {
-                      const mod = getAbilityMod(stats[sk.ability]);
-                      return (
-                        <div
-                          key={sk.id}
-                          onClick={() => handleRollCheck(sk.name, mod, false)}
-                          className="cursor-pointer bg-dnd-darker border border-dnd-border hover:border-dnd-gold rounded-lg px-3 py-2 text-xs flex items-center justify-between transition"
-                        >
-                          <span className="text-gray-300">
-                            {sk.name} <span className="text-[10px] text-gray-500 font-mono">({sk.ability.toUpperCase()})</span>
-                          </span>
-                          <span className="font-mono font-bold text-dnd-gold">{formatMod(mod)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* SPELLS TAB */}
+            {/* TAB 4: SPELLS */}
             {activeTab === 'spells' && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between pb-2 border-b border-dnd-border">
-                  <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Espaços de Magia</h4>
-                  {character.spellSlots && (
-                    <div className="text-xs font-mono text-dnd-gold">
-                      1º Círculo: {character.spellSlots[1]?.current} / {character.spellSlots[1]?.total}
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {SPELLS.map(sp => (
-                    <div key={sp.id} className="bg-dnd-darker border border-dnd-border rounded-xl p-3 flex flex-col justify-between">
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-sm text-gray-200">{sp.name}</span>
-                          <span className="text-[10px] bg-dnd-panel px-1.5 py-0.5 rounded font-mono text-purple-400 border border-dnd-border">
-                            {sp.level === 0 ? 'Truque' : `Nv. ${sp.level}`}
-                          </span>
-                        </div>
-                        <p className="text-xs text-gray-400 mt-1 line-clamp-2">{sp.desc}</p>
-                      </div>
-
-                      <div className="mt-3 flex items-center justify-between pt-2 border-t border-dnd-border/60">
-                        <span className="text-[11px] font-mono text-amber-400">
-                          {sp.damage ? `Dano: ${sp.damage}` : sp.heal ? `Cura: ${sp.heal}` : sp.school}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {SPELLS.map(sp => (
+                  <div key={sp.id} className="bg-dnd-darker border border-dnd-border rounded-xl p-3 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-sm text-gray-200">{sp.name}</span>
+                        <span className="text-[10px] bg-dnd-panel px-1.5 py-0.5 rounded font-mono text-purple-400">
+                          {sp.level === 0 ? 'Truque' : `Círculo ${sp.level}`}
                         </span>
-                        <button
-                          onClick={() => handleCastSpell(sp)}
-                          className="bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-700 px-3 py-1 rounded text-xs font-bold transition"
-                        >
-                          Conjurar
-                        </button>
                       </div>
+                      <p className="text-xs text-gray-400 mt-1">{sp.desc}</p>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* INVENTORY TAB */}
-            {activeTab === 'inventory' && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between pb-2 border-b border-dnd-border">
-                  <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Itens na Mochila</h4>
-                  <div className="flex items-center space-x-2 text-sm font-bold text-amber-400">
-                    <Coins className="w-4 h-4" />
-                    <span>{character.gold || 0} Peças de Ouro (PO)</span>
+                    <div className="mt-3 pt-2 border-t border-dnd-border/50 flex items-center justify-between text-xs">
+                      <span className="text-amber-400 font-mono">
+                        {sp.damage ? `Dano: ${sp.damage}` : `Cura: ${sp.heal}`}
+                      </span>
+                      <span className="text-gray-400">Alcance: {sp.range}m</span>
+                    </div>
                   </div>
-                </div>
-
-                <div className="divide-y divide-dnd-border/40">
-                  {(character.inventory || []).map((item, idx) => (
-                    <div key={idx} className="py-2.5 flex items-center justify-between text-xs">
-                      <div>
-                        <span className="font-bold text-gray-200 text-sm">{item.name}</span>
-                        <div className="text-gray-400 mt-0.5">
-                          {item.desc || (item.damage ? `Dano: ${item.damage}` : item.ac ? `CA: ${item.ac}` : '')}
-                        </div>
-                      </div>
-
-                      {item.type === 'consumable' && (
-                        <button
-                          onClick={() => handleUsePotion(idx)}
-                          className="bg-emerald-900/80 hover:bg-emerald-800 text-emerald-200 border border-emerald-700 px-3 py-1.5 rounded-lg text-xs font-bold transition"
-                        >
-                          Beber Poção
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                ))}
               </div>
             )}
           </div>
