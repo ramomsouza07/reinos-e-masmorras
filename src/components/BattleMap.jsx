@@ -24,10 +24,27 @@ import {
   Flame,
   Moon,
   Sun,
-  X
+  X,
+  Target,
+  Zap,
+  Coins
 } from 'lucide-react';
-import { MAP_PRESETS, CONDITIONS, ADVENTURES, MONSTERS, SPELLS, getAbilityMod, formatMod } from '../data/dndData';
+import { MAP_PRESETS, CONDITIONS, ADVENTURES, MONSTERS, SPELLS, STORY_CAMPAIGN, getAbilityMod, formatMod } from '../data/dndData';
 import { sounds } from '../utils/soundEffects';
+import { parseDiceFormula } from '../utils/dice';
+import { findPath, hasLineOfSight, isTileBlocked } from '../utils/pathfinding';
+import { 
+  renderThemedFloor, 
+  render3DObstacles, 
+  renderLightingAndVignette, 
+  renderPathfindingPreview, 
+  renderActiveProjectiles,
+  renderLandPortal,
+  renderGatherables
+} from '../utils/mapRenderer';
+import { drawCharacter2D } from './Character2DSprite';
+import NPCDialogueModal from './NPCDialogueModal';
+import StoryQuestHUD from './StoryQuestHUD';
 
 export default function BattleMap({ 
   room, 
@@ -56,6 +73,8 @@ export default function BattleMap({
   // Visual Combat Effects (Floating numbers & attack beams)
   const [visualEffects, setVisualEffects] = useState([]);
   const [actionAlert, setActionAlert] = useState(null);
+  const [activeDialogueNpc, setActiveDialogueNpc] = useState(null);
+  const [showStoryLoreModal, setShowStoryLoreModal] = useState(false);
 
   // UI Drawers & Modals on Map
   const [showAdventureModal, setShowAdventureModal] = useState(false);
@@ -65,6 +84,21 @@ export default function BattleMap({
   // Ping state
   const [pings, setPings] = useState([]);
   const [isPingToolActive, setIsPingToolActive] = useState(false);
+  const [fogBrush, setFogBrush] = useState(null); // 'reveal' | 'hide' | null
+
+  // Tibia Real-Time Mode States
+  const [tibiaMode, setTibiaMode] = useState(true);
+  const [cameraFollow, setCameraFollow] = useState(true);
+  const [autoAttack, setAutoAttack] = useState(true);
+  const [hasteUntil, setHasteUntil] = useState(0);
+  const [corpses, setCorpses] = useState(room.corpses || []);
+  const [lootModalCorpse, setLootModalCorpse] = useState(null);
+  const [showBattleList, setShowBattleList] = useState(true);
+  const [lastAttackTime, setLastAttackTime] = useState(0);
+  const [hotkeyCooldowns, setHotkeyCooldowns] = useState({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
+  const [projectiles, setProjectiles] = useState([]);
+  const [screenShakeUntil, setScreenShakeUntil] = useState(0);
+  const [previewPath, setPreviewPath] = useState([]);
 
   const currentMap = room.map || MAP_PRESETS[0];
   const gridSize = currentMap.gridSize || 52;
@@ -95,10 +129,44 @@ export default function BattleMap({
 
     const handleVisualEffect = (eff) => {
       const id = Date.now() + Math.random();
-      if (eff.effectType === 'heal') sounds.playHeal();
-      else if (eff.effectType === 'fire') sounds.playSpell();
-      else if (eff.isCrit) sounds.playCriticalSuccess();
-      else sounds.playAttack();
+      if (eff.effectType === 'explosion') {
+        sounds.playExplosion();
+        setScreenShakeUntil(Date.now() + 350);
+      } else if (eff.effectType === 'alert') {
+        sounds.playAlert();
+      } else if (eff.effectType === 'arrow') {
+        sounds.playBowShot();
+      } else if (eff.effectType === 'heal') {
+        sounds.playHeal();
+      } else if (eff.effectType === 'fire') {
+        sounds.playSpell();
+      } else if (eff.isCrit) {
+        sounds.playCriticalSuccess();
+        setScreenShakeUntil(Date.now() + 250);
+      } else {
+        sounds.playAttack();
+      }
+
+      // If projectile coordinates are provided, spawn canvas flying projectile
+      if (eff.fromX !== undefined && eff.toX !== undefined && (eff.fromX !== eff.toX || eff.fromY !== eff.toY)) {
+        const projId = Date.now() + Math.random();
+        setProjectiles(prev => [
+          ...prev,
+          {
+            id: projId,
+            fromX: eff.fromX,
+            fromY: eff.fromY,
+            toX: eff.toX,
+            toY: eff.toY,
+            type: eff.effectType === 'fire' ? 'fire' : eff.effectType === 'arrow' ? 'arrow' : 'magic',
+            startTime: Date.now(),
+            duration: 300
+          }
+        ]);
+        setTimeout(() => {
+          setProjectiles(prev => prev.filter(p => p.id !== projId));
+        }, 340);
+      }
 
       setVisualEffects(prev => [...prev, { ...eff, id, createdAt: Date.now() }]);
       setTimeout(() => {
@@ -120,14 +188,20 @@ export default function BattleMap({
       }, 2000);
     };
 
+    const handleCorpses = (updatedCorpses) => {
+      setCorpses(updatedCorpses || []);
+    };
+
     socket.on('combat:visual_effect', handleVisualEffect);
     socket.on('combat:action_error', handleActionError);
     socket.on('map:ping_received', handlePing);
+    socket.on('room:corpses_updated', handleCorpses);
 
     return () => {
       socket.off('combat:visual_effect', handleVisualEffect);
       socket.off('combat:action_error', handleActionError);
       socket.off('map:ping_received', handlePing);
+      socket.off('room:corpses_updated', handleCorpses);
     };
   }, [socket]);
 
@@ -140,6 +214,16 @@ export default function BattleMap({
       y: height / 2 - (row * gridSize + gridSize / 2) * zoom
     });
   };
+
+  // Centraliza automaticamente a câmera no herói ao entrar no mapa ou mudar de Land
+  useEffect(() => {
+    if (myToken) {
+      const timer = setTimeout(() => {
+        centerOnGrid(myToken.x, myToken.y);
+      }, 60);
+      return () => clearTimeout(timer);
+    }
+  }, [currentMap?.id, myToken?.id]);
 
   // Convert screen coords to grid coords
   const screenToGrid = useCallback((screenX, screenY) => {
@@ -173,100 +257,34 @@ export default function BattleMap({
 
       ctx.clearRect(0, 0, width, height);
       ctx.save();
-      ctx.translate(pan.x, pan.y);
+
+      // Screen Shake when critical hits or explosions occur
+      const now = Date.now();
+      const isShaking = now < screenShakeUntil;
+      const shakeX = isShaking ? (Math.random() - 0.5) * 8 : 0;
+      const shakeY = isShaking ? (Math.random() - 0.5) * 8 : 0;
+      ctx.translate(pan.x + shakeX, pan.y + shakeY);
       ctx.scale(zoom, zoom);
 
       const totalWidth = cols * gridSize;
       const totalHeight = rows * gridSize;
 
-      // 1. Draw Textured Checkerboard Floor
-      const baseColor = currentMap.bgColor || '#151821';
-      const altColor = currentMap.floorColor || '#1e2230';
-      for (let c = 0; c < cols; c++) {
-        for (let r = 0; r < rows; r++) {
-          ctx.fillStyle = (c + r) % 2 === 0 ? baseColor : altColor;
-          ctx.fillRect(c * gridSize, r * gridSize, gridSize, gridSize);
-        }
+      // 1. Draw High-Aesthetic Themed Floor (Flagstones, Wood Boards, Forest Earth, Volcanic Basalt)
+      renderThemedFloor(ctx, cols, rows, gridSize, currentMap);
+
+      // 2. Draw 3D Obstacles (Masonry Walls with Mortar, Column Pillars, Glowing Altars, Canopies)
+      render3DObstacles(ctx, currentMap.obstacles, gridSize, now, currentMap);
+
+      // 3. Draw Warm Atmospheric Torchlight & Dark Vignette
+      renderLightingAndVignette(ctx, currentMap.torches, cols, rows, gridSize, now);
+
+      // 4. Draw Pathfinding Trajectory Preview
+      if (previewPath && previewPath.length > 0) {
+        renderPathfindingPreview(ctx, previewPath, gridSize, 6);
       }
 
-      // Outer Map Border
-      ctx.strokeStyle = '#C59B27';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(-2, -2, totalWidth + 4, totalHeight + 4);
-
-      // 2. Draw Obstacles & Terrain Props
-      if (currentMap.obstacles) {
-        currentMap.obstacles.forEach(obs => {
-          const ox = obs.x * gridSize;
-          const oy = obs.y * gridSize;
-          const ow = obs.w * gridSize;
-          const oh = obs.h * gridSize;
-
-          if (obs.type === 'wall' || obs.type === 'pillar') {
-            ctx.fillStyle = '#2d3345';
-            ctx.fillRect(ox, oy, ow, oh);
-            ctx.strokeStyle = '#475569';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(ox + 2, oy + 2, ow - 4, oh - 4);
-          } else if (obs.type === 'tree') {
-            ctx.fillStyle = 'rgba(20, 83, 45, 0.85)';
-            ctx.beginPath();
-            ctx.arc(ox + ow / 2, oy + oh / 2, Math.min(ow, oh) / 2 - 4, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.strokeStyle = '#166534';
-            ctx.lineWidth = 3;
-            ctx.stroke();
-          } else if (obs.type === 'lava') {
-            ctx.fillStyle = 'rgba(220, 38, 38, 0.75)';
-            ctx.fillRect(ox, oy, ow, oh);
-            ctx.strokeStyle = '#F59E0B';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(ox, oy, ow, oh);
-          } else if (obs.type === 'table' || obs.type === 'boulder') {
-            ctx.fillStyle = '#78350f';
-            ctx.fillRect(ox + 4, oy + 4, ow - 8, oh - 8);
-            ctx.strokeStyle = '#b45309';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(ox + 4, oy + 4, ow - 8, oh - 8);
-          } else if (obs.type === 'altar') {
-            ctx.fillStyle = '#4c1d95';
-            ctx.fillRect(ox + 2, oy + 2, ow - 4, oh - 4);
-            ctx.strokeStyle = '#c084fc';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(ox + 2, oy + 2, ow - 4, oh - 4);
-          }
-
-          if (obs.label) {
-            ctx.font = 'bold 10px Inter, sans-serif';
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(obs.label, ox + ow / 2, oy + oh / 2);
-          }
-        });
-      }
-
-      // 3. Draw Torches & Ambient Warm Lighting
-      const flicker = 0.9 + Math.sin(Date.now() / 150) * 0.1;
-      if (currentMap.torches) {
-        currentMap.torches.forEach(torch => {
-          const tx = torch.x * gridSize + gridSize / 2;
-          const ty = torch.y * gridSize + gridSize / 2;
-          const grad = ctx.createRadialGradient(tx, ty, 5, tx, ty, gridSize * 3.2 * flicker);
-          grad.addColorStop(0, 'rgba(251, 191, 36, 0.28)');
-          grad.addColorStop(0.5, 'rgba(245, 158, 11, 0.1)');
-          grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.arc(tx, ty, gridSize * 3.2, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.font = '16px serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText('🔥', tx, ty);
-        });
-      }
+      // 5. Draw Active Flying Projectiles (Arrows, Fireballs, Magic Missiles)
+      renderActiveProjectiles(ctx, projectiles, gridSize, now);
 
       // 4. Draw Grid Lines & Coordinates
       ctx.strokeStyle = currentMap.gridColor || 'rgba(255, 255, 255, 0.09)';
@@ -328,7 +346,109 @@ export default function BattleMap({
         ctx.font = 'bold 10px Inter, sans-serif';
         ctx.fillStyle = chest.opened ? '#9CA3AF' : '#FDE68A';
         ctx.fillText(chest.opened ? 'Baú Aberto' : `Baú (${chest.gold} PO)`, cx, cy + gridSize * 0.48);
+
+        // Action Prompt [E] if adjacent
+        if (!chest.opened && myToken) {
+          const isNear = Math.max(Math.abs(chest.x - myToken.x), Math.abs(chest.y - myToken.y)) <= 1.5;
+          if (isNear) {
+            ctx.save();
+            ctx.fillStyle = '#F59E0B';
+            ctx.shadowColor = '#F59E0B';
+            ctx.shadowBlur = 8;
+            ctx.beginPath();
+            ctx.roundRect(cx - 36, cy - gridSize * 0.62, 72, 18, 5);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.font = 'bold 10px monospace';
+            ctx.fillStyle = '#000000';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('[E] Abrir Baú', cx, cy - gridSize * 0.62 + 9);
+            ctx.restore();
+          }
+        }
       });
+
+      // 6.1 Draw Corpses on Map (Tibia Style)
+      (corpses && corpses.length > 0 ? corpses : (room.corpses || [])).forEach(corpse => {
+        const cx = corpse.x * gridSize + gridSize / 2;
+        const cy = corpse.y * gridSize + gridSize / 2;
+
+        ctx.font = '24px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(corpse.opened ? '🦴' : '💀', cx, cy);
+
+        // Gold sparkle if contains loot
+        if (!corpse.opened && (corpse.gold > 0 || (corpse.items && corpse.items.length > 0))) {
+          const glint = Math.sin(Date.now() / 200) > 0 ? '✨' : '💰';
+          ctx.font = '14px serif';
+          ctx.fillText(glint, cx + 12, cy - 10);
+        }
+
+        ctx.font = 'bold 9px Inter, sans-serif';
+        ctx.fillStyle = corpse.opened ? '#9CA3AF' : '#FDE68A';
+        ctx.fillText(corpse.opened ? 'Restos Mortais' : corpse.name, cx, cy + gridSize * 0.44);
+
+        // Action Prompt [E] if adjacent
+        if (!corpse.opened && myToken) {
+          const isNear = Math.max(Math.abs(corpse.x - myToken.x), Math.abs(corpse.y - myToken.y)) <= 1.2;
+          if (isNear) {
+            ctx.save();
+            ctx.fillStyle = '#10B981';
+            ctx.shadowColor = '#10B981';
+            ctx.shadowBlur = 8;
+            ctx.beginPath();
+            ctx.roundRect(cx - 38, cy - gridSize * 0.6, 76, 18, 5);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.font = 'bold 10px monospace';
+            ctx.fillStyle = '#000000';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('[E] Saquear', cx, cy - gridSize * 0.6 + 9);
+            ctx.restore();
+          }
+        }
+      });
+
+      // 6.2 Draw Altar Action Prompt [E] if adjacent
+      if (currentMap.obstacles && myToken) {
+        currentMap.obstacles.forEach(obs => {
+          if (obs.type === 'altar') {
+            const isNear = Math.max(Math.abs(obs.x - myToken.x), Math.abs(obs.y - myToken.y)) <= 2.2;
+            if (isNear) {
+              const ox = obs.x * gridSize + (obs.w || 1) * gridSize / 2;
+              const oy = obs.y * gridSize + (obs.h || 1) * gridSize / 2;
+              ctx.save();
+              ctx.fillStyle = '#A855F7';
+              ctx.shadowColor = '#C084FC';
+              ctx.shadowBlur = 10;
+              ctx.beginPath();
+              ctx.roundRect(ox - 46, oy - gridSize * 0.72, 92, 20, 5);
+              ctx.fill();
+              ctx.shadowBlur = 0;
+              ctx.font = 'bold 10px monospace';
+              ctx.fillStyle = '#FFFFFF';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText('[E] Rezar no Altar', ox, oy - gridSize * 0.72 + 10);
+              ctx.restore();
+            }
+          }
+        });
+      }
+
+      // 6.3 Render Land Portal / Archway
+      const pPos = room.portalPosition || currentMap.portalPosition;
+      if (pPos) {
+        renderLandPortal(ctx, pPos, gridSize, room.bossDefeated, room.portalName, myToken);
+      }
+
+      // 6.4 Render Interactive Gatherables (Herbs, Crystals, Relics)
+      if (room.gatherables) {
+        renderGatherables(ctx, room.gatherables, gridSize, myToken);
+      }
 
       // 7. Draw Aiming / Target Line between My Token and Selected Target
       if (myToken && selectedTarget && selectedTarget.id !== myToken.id) {
@@ -410,7 +530,7 @@ export default function BattleMap({
           ctx.shadowBlur = 0;
         }
 
-        // Selected Target Crosshair Ring
+        // Selected Target Crosshair Ring & Tibia Corner Brackets
         if (isTargeted) {
           ctx.beginPath();
           ctx.arc(cx, cy, radius + 6, 0, Math.PI * 2);
@@ -419,24 +539,167 @@ export default function BattleMap({
           ctx.setLineDash([6, 4]);
           ctx.stroke();
           ctx.setLineDash([]);
+
+          // Classic Tibia 4 Red Corner Brackets [ ]
+          const bSize = radius + 8;
+          const cLen = 9;
+          ctx.strokeStyle = tok.type === 'enemy' ? '#EF4444' : '#60A5FA';
+          ctx.lineWidth = 3;
+          ctx.shadowColor = tok.type === 'enemy' ? '#DC2626' : '#2563EB';
+          ctx.shadowBlur = 8;
+
+          // Top-Left corner
+          ctx.beginPath();
+          ctx.moveTo(cx - bSize, cy - bSize + cLen);
+          ctx.lineTo(cx - bSize, cy - bSize);
+          ctx.lineTo(cx - bSize + cLen, cy - bSize);
+          ctx.stroke();
+
+          // Top-Right corner
+          ctx.beginPath();
+          ctx.moveTo(cx + bSize - cLen, cy - bSize);
+          ctx.lineTo(cx + bSize, cy - bSize);
+          ctx.lineTo(cx + bSize, cy - bSize + cLen);
+          ctx.stroke();
+
+          // Bottom-Left corner
+          ctx.beginPath();
+          ctx.moveTo(cx - bSize, cy + bSize - cLen);
+          ctx.lineTo(cx - bSize, cy + bSize);
+          ctx.lineTo(cx - bSize + cLen, cy + bSize);
+          ctx.stroke();
+
+          // Bottom-Right corner
+          ctx.beginPath();
+          ctx.moveTo(cx + bSize - cLen, cy + bSize);
+          ctx.lineTo(cx + bSize, cy + bSize);
+          ctx.lineTo(cx + bSize, cy + bSize - cLen);
+          ctx.stroke();
+
+          ctx.shadowBlur = 0;
         }
 
-        // Token Base Circle
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.fillStyle = tok.type === 'enemy' ? '#450a0a' : isMe ? '#1e3a8a' : '#064e3b';
-        ctx.fill();
+        // 9.1 Render 2D Player / NPC Character or Enemy Token
+        if (tok.type === 'player') {
+          // Render 2D Customizable Character Sprite
+          const playerApp = tok.appearance || (isMe ? myChar?.appearance : null) || {
+            outfitColor: tok.color || '#3B82F6',
+            skinTone: '#f5c6a5',
+            hairStyle: 'short',
+            weapon: 'sword',
+            hasShield: true
+          };
+          drawCharacter2D(ctx, cx, cy, tSize * 1.15, playerApp, { isMoving: isDraggingThis });
+        } else if (tok.type === 'npc') {
+          // Render 2D NPC Character Sprite
+          const npcApp = tok.appearance || {
+            skinTone: '#d49870',
+            hairStyle: 'long',
+            hairColor: '#e5e7eb',
+            outfitType: 'robe',
+            outfitColor: '#15803d',
+            headwear: 'none',
+            weapon: 'staff',
+            hasShield: false
+          };
+          drawCharacter2D(ctx, cx, cy, tSize * 1.15, npcApp, { isMoving: false });
 
-        // Border Ring
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = tok.type === 'enemy' ? '#EF4444' : (tok.color || '#3B82F6');
-        ctx.stroke();
+          // Prompt [E] Falar com NPC se jogador adjacente
+          if (myToken) {
+            const isNear = Math.max(Math.abs(tok.x - myToken.x), Math.abs(tok.y - myToken.y)) <= 1.8;
+            if (isNear) {
+              ctx.save();
+              ctx.fillStyle = '#F59E0B';
+              ctx.shadowColor = '#F59E0B';
+              ctx.shadowBlur = 10;
+              ctx.beginPath();
+              ctx.roundRect(cx - 45, cy - gridSize * 0.72, 90, 20, 5);
+              ctx.fill();
+              ctx.shadowBlur = 0;
+              ctx.font = 'bold 10px monospace';
+              ctx.fillStyle = '#000000';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText('[E] Conversar', cx, cy - gridSize * 0.72 + 10);
+              ctx.restore();
+            }
+          }
+        } else {
+          // Indicador de Raio de Aggro MMORPG (2 quadrados) ao selecionar ou passar o mouse sobre o inimigo
+          const isHoveredEnemy = hoverCell && hoverCell.col >= drawX && hoverCell.col < drawX + (tok.size || 1) && hoverCell.row >= drawY && hoverCell.row < drawY + (tok.size || 1);
+          if (isTargeted || isHoveredEnemy || tok.aggroTargetId) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(cx, cy, gridSize * 2.5, 0, Math.PI * 2);
+            ctx.strokeStyle = tok.aggroTargetId ? 'rgba(239, 68, 68, 0.35)' : 'rgba(245, 158, 11, 0.25)';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([6, 6]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+          }
 
-        // Avatar Emoji
-        ctx.font = `${Math.floor(radius * 1.15)}px serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(tok.avatar || (tok.type === 'enemy' ? '👹' : '⚔️'), cx, cy + 1);
+          // Aura de Perseguição MMORPG (quando o inimigo detectou um jogador a <= 2 de distância)
+          if (tok.aggroTargetId) {
+            const aggroPulse = Math.sin(Date.now() / 120) * 3;
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius + 7 + aggroPulse, 0, Math.PI * 2);
+            ctx.strokeStyle = '#EF4444';
+            ctx.lineWidth = 3;
+            ctx.shadowColor = '#DC2626';
+            ctx.shadowBlur = 14;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+
+            // Badge "❗ PERSEGUINDO"
+            ctx.fillStyle = 'rgba(185, 28, 28, 0.92)';
+            ctx.beginPath();
+            ctx.roundRect(cx - 42, ty - 28, 84, 15, 4);
+            ctx.fill();
+            ctx.font = 'bold 9px monospace';
+            ctx.fillStyle = '#FEF2F2';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('❗ PERSEGUINDO', cx, ty - 20.5);
+            ctx.restore();
+          }
+
+          // Boss Aura se for o Chefão da Land
+          if (tok.isBoss) {
+            const bossPulse = Math.sin(Date.now() / 150) * 4;
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius + 10 + bossPulse, 0, Math.PI * 2);
+            ctx.strokeStyle = '#DC2626';
+            ctx.lineWidth = 3.5;
+            ctx.shadowColor = '#EF4444';
+            ctx.shadowBlur = 16;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+
+            // Coroa de Boss
+            ctx.font = '16px serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('👑', cx, ty - (tok.aggroTargetId ? 36 : 16));
+          }
+
+          // Enemy Token Base Circle
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.fillStyle = '#450a0a';
+          ctx.fill();
+
+          // Border Ring
+          ctx.lineWidth = tok.isBoss ? 4 : 3;
+          ctx.strokeStyle = tok.isBoss ? '#F59E0B' : '#EF4444';
+          ctx.stroke();
+
+          // Avatar Emoji
+          ctx.font = `${Math.floor(radius * (tok.isBoss ? 1.3 : 1.15))}px serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(tok.avatar || '👹', cx, cy + 1);
+        }
 
         // HP Bar Above Token
         if (tok.maxHp && tok.maxHp > 0) {
@@ -481,6 +744,17 @@ export default function BattleMap({
         ctx.shadowBlur = 4;
         ctx.fillText(isMe ? `${tok.name} (Você)` : tok.name, cx, cy + radius + 3);
         ctx.shadowBlur = 0;
+
+        // Condition Badges on Canvas Token
+        if (tok.conditions && tok.conditions.length > 0) {
+          ctx.font = '12px serif';
+          ctx.textBaseline = 'middle';
+          tok.conditions.forEach((cId, cIdx) => {
+            const cond = CONDITIONS.find(c => c.id === cId) || { icon: '⚠️', name: cId };
+            const badgeOffset = (cIdx - (tok.conditions.length - 1) / 2) * 16;
+            ctx.fillText(cond.icon || '⚠️', cx + badgeOffset, cy + radius + 17);
+          });
+        }
       });
 
       // 10. Optional Fog of War (Only if explicitly enabled by DM)
@@ -499,7 +773,6 @@ export default function BattleMap({
       }
 
       // 11. Draw Visual Combat Effects (Attack beams & Floating combat text)
-      const now = Date.now();
       visualEffects.forEach(eff => {
         const age = now - eff.createdAt;
         const progress = Math.min(1, age / 2000);
@@ -553,7 +826,7 @@ export default function BattleMap({
 
     animFrameId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animFrameId);
-  }, [pan, zoom, currentMap, room, isDM, myChar, myToken, draggedToken, dragOrigin, dragCurrent, selectedTarget, hoverCell, visualEffects, pings, cols, rows, gridSize]);
+  }, [pan, zoom, currentMap, room, isDM, myChar, myToken, draggedToken, dragOrigin, dragCurrent, selectedTarget, hoverCell, visualEffects, pings, cols, rows, gridSize, previewPath, projectiles, screenShakeUntil]);
 
   // Mouse handlers
   const handleWheel = (e) => {
@@ -579,7 +852,24 @@ export default function BattleMap({
       return;
     }
 
+    if (fogBrush && isDM) {
+      if (col >= 0 && col < cols && row >= 0 && row < rows) {
+        const tile = `${col},${row}`;
+        socket.emit(fogBrush === 'reveal' ? 'fog:reveal' : 'fog:hide', { tiles: [tile] });
+      }
+      return;
+    }
+
     if (e.button === 0) {
+      // Check if clicked on a Corpse (Tibia Style)
+      const allCorpses = corpses.length > 0 ? corpses : (room.corpses || []);
+      const clickedCorpse = allCorpses.find(c => c.x === col && c.y === row);
+      if (clickedCorpse) {
+        sounds.playCoins();
+        setLootModalCorpse(clickedCorpse);
+        return;
+      }
+
       // Check if clicked on an unopened Treasure Chest
       const clickedChest = (room.chests || []).find(c => !c.opened && c.x === col && c.y === row);
       if (clickedChest) {
@@ -606,6 +896,24 @@ export default function BattleMap({
           setDragCurrent({ x: clickedToken.x, y: clickedToken.y });
         }
       } else {
+        if (myToken && col >= 0 && col < cols && row >= 0 && row < rows) {
+          if (isTileBlocked(col, row, currentMap.obstacles, cols, rows)) {
+            setActionAlert('Posição bloqueada por obstáculo do mapa!');
+          } else {
+            const path = findPath(myToken.x, myToken.y, col, row, currentMap.obstacles, cols, rows);
+            if (path && path.length > 0) {
+              // Movimentação MMORPG 100% em Tempo Real (sem bloqueio por turnos)
+              const dest = path[path.length - 1];
+              myTokenPosRef.current = { x: dest.x, y: dest.y };
+              myToken.x = dest.x;
+              myToken.y = dest.y;
+              socket.emit('token:move', { tokenId: myToken.id, x: dest.x, y: dest.y });
+              if (cameraFollow) centerOnGrid(dest.x, dest.y);
+              setPreviewPath([]);
+              return;
+            }
+          }
+        }
         // Pan map if clicking empty background
         setIsPanning(true);
         setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
@@ -617,6 +925,26 @@ export default function BattleMap({
   const handleMouseMove = (e) => {
     const { col, row } = screenToGrid(e.clientX, e.clientY);
     setHoverCell({ col, row });
+
+    // Pathfinding Hover Preview
+    if (myToken && !draggedToken && !isPanning && col >= 0 && col < cols && row >= 0 && row < rows) {
+      if (!isTileBlocked(col, row, currentMap.obstacles, cols, rows)) {
+        const p = findPath(myToken.x, myToken.y, col, row, currentMap.obstacles, cols, rows);
+        setPreviewPath(p);
+      } else {
+        setPreviewPath([]);
+      }
+    } else if (previewPath.length > 0) {
+      setPreviewPath([]);
+    }
+
+    if (fogBrush && isDM && e.buttons === 1) {
+      if (col >= 0 && col < cols && row >= 0 && row < rows) {
+        const tile = `${col},${row}`;
+        socket.emit(fogBrush === 'reveal' ? 'fog:reveal' : 'fog:hide', { tiles: [tile] });
+      }
+      return;
+    }
 
     if (isPanning) {
       setPan({ x: e.clientX - panStart.x, y: e.clientY - panStart.y });
@@ -677,6 +1005,35 @@ export default function BattleMap({
       }
     }
 
+    // Line-of-Sight & Obstacle Check
+    const distSq = Math.max(Math.abs(target.x - myToken.x), Math.abs(target.y - myToken.y));
+    if (distSq > 1 && !hasLineOfSight(myToken.x, myToken.y, target.x, target.y, currentMap.obstacles)) {
+      setActionAlert('Linha de visão bloqueada por parede ou pilar!');
+      return;
+    }
+
+    // Spawn client-side projectile if ranged
+    const isRanged = (item.range && item.range > 3) || item.properties?.some(p => p.includes('Munição') || p.includes('Arremesso')) || actionType === 'spell';
+    if (isRanged) {
+      const projId = Date.now() + Math.random();
+      setProjectiles(prev => [
+        ...prev,
+        {
+          id: projId,
+          fromX: myToken.x,
+          fromY: myToken.y,
+          toX: target.x,
+          toY: target.y,
+          type: actionType === 'spell' ? 'fire' : 'arrow',
+          startTime: Date.now(),
+          duration: 280
+        }
+      ]);
+      setTimeout(() => setProjectiles(prev => prev.filter(p => p.id !== projId)), 320);
+      if (actionType === 'spell') sounds.playSpell();
+      else sounds.playBowShot();
+    }
+
     socket.emit('combat:execute_action', {
       actorTokenId: myToken.id,
       targetTokenId: target.id,
@@ -696,7 +1053,8 @@ export default function BattleMap({
     }
     const pot = myChar.inventory[potIdx];
     sounds.playHeal();
-    const healAmount = pot.id === 'pocao_cura_maior' ? Math.floor(Math.random() * 12) + 8 : Math.floor(Math.random() * 7) + 4;
+    const parsed = pot.heal ? parseDiceFormula(pot.heal) : null;
+    const healAmount = parsed?.total || (pot.id === 'pocao_cura_maior' ? (Math.floor(Math.random() * 13) + 8) : (Math.floor(Math.random() * 7) + 4));
     const newHp = Math.min(myChar.maxHp, (myChar.hp || 0) + healAmount);
     const newInv = [...myChar.inventory];
     newInv.splice(potIdx, 1);
@@ -738,6 +1096,335 @@ export default function BattleMap({
   const activeTurnTokenId = room.combat?.active ? room.combat.turnOrder[room.combat.currentTurnIndex] : null;
   const activeTurnToken = (room.tokens || []).find(t => t.id === activeTurnTokenId);
 
+  const lastStepTimeRef = useRef(0);
+  const myTokenPosRef = useRef(myToken ? { x: myToken.x, y: myToken.y } : { x: 3, y: 7 });
+
+  useEffect(() => {
+    if (myToken) {
+      myTokenPosRef.current = { x: myToken.x, y: myToken.y };
+    }
+  }, [myToken?.x, myToken?.y]);
+
+  // Center camera on hero when moving if cameraFollow is active
+  useEffect(() => {
+    if (cameraFollow && myToken && tibiaMode) {
+      centerOnGrid(myToken.x, myToken.y);
+    }
+  }, [myToken?.x, myToken?.y, cameraFollow, tibiaMode]);
+
+  const targetNearestEnemy = useCallback(() => {
+    if (!myToken || enemies.length === 0) return;
+    const sorted = [...enemies].sort((a, b) => {
+      const da = Math.max(Math.abs(a.x - myToken.x), Math.abs(a.y - myToken.y));
+      const db = Math.max(Math.abs(b.x - myToken.x), Math.abs(b.y - myToken.y));
+      return da - db;
+    });
+    setSelectedTarget(sorted[0]);
+    sounds.playAttack();
+  }, [myToken, enemies]);
+
+  const lootAdjacentCorpse = useCallback(() => {
+    if (!myToken) return;
+    const allCorpses = corpses.length > 0 ? corpses : (room.corpses || []);
+    const unlooted = allCorpses.filter(c => !c.opened);
+    const adjacent = unlooted.find(c => 
+      Math.max(Math.abs(c.x - myToken.x), Math.abs(c.y - myToken.y)) <= 1
+    );
+    if (adjacent) {
+      sounds.playCoins();
+      setLootModalCorpse(adjacent);
+    } else if (unlooted.length > 0) {
+      setActionAlert('Aproxime-se do cadáver para saquear! (1 quadrado de distância)');
+    } else {
+      setActionAlert('Nenhum cadáver por perto para saquear.');
+    }
+  }, [myToken, corpses, room.corpses]);
+
+  // Action Key [E] to interact with Portal, NPCs, Gatherables, Chests, Altars, and Corpses
+  const handleActionKeyE = useCallback(() => {
+    if (!myToken) return;
+
+    // 0. Check adjacent Land Portal
+    const portalPos = room.portalPosition || currentMap.portalPosition;
+    if (portalPos && Math.max(Math.abs(portalPos.x - myToken.x), Math.abs(portalPos.y - myToken.y)) <= 1.8) {
+      if (room.bossDefeated) {
+        sounds.playCriticalSuccess();
+        socket.emit('land:advance');
+        return;
+      } else {
+        sounds.playAlert();
+        setActionAlert('O Portal está selado! Derrotem o Boss da Land para abrir a passagem.');
+        return;
+      }
+    }
+
+    // 0.5 Check adjacent NPC
+    const nearNpc = (room.tokens || []).find(t => 
+      t.type === 'npc' && Math.max(Math.abs(t.x - myToken.x), Math.abs(t.y - myToken.y)) <= 1.8
+    );
+    if (nearNpc) {
+      sounds.playShrineBuff();
+      setActiveDialogueNpc(nearNpc);
+      return;
+    }
+
+    // 0.8 Check adjacent Gatherable (Herb, Crystal)
+    const nearGatherable = (room.gatherables || []).find(g => 
+      !g.gathered && Math.max(Math.abs(g.x - myToken.x), Math.abs(g.y - myToken.y)) <= 1.5
+    );
+    if (nearGatherable) {
+      sounds.playHeal();
+      socket.emit('gatherable:collect', { id: nearGatherable.id });
+      return;
+    }
+
+    // 1. Check adjacent unopened chest
+    const allChests = room.chests || [];
+    const adjacentChest = allChests.find(c => 
+      !c.opened && Math.max(Math.abs(c.x - myToken.x), Math.abs(c.y - myToken.y)) <= 1.5
+    );
+    if (adjacentChest) {
+      sounds.playCoins();
+      socket.emit('chest:open', { chestId: adjacentChest.id });
+      return;
+    }
+
+    // 2. Check adjacent altar / shrine
+    const obstacles = currentMap.obstacles || [];
+    const adjacentAltar = obstacles.find(obs => 
+      obs.type === 'altar' && 
+      Math.max(Math.abs(obs.x - myToken.x), Math.abs(obs.y - myToken.y)) <= 2.2
+    );
+    if (adjacentAltar) {
+      sounds.playShrineBuff();
+      socket.emit('shrine:pray', { shrineId: adjacentAltar.label || 'altar' });
+      return;
+    }
+
+    // 3. Check adjacent corpse
+    lootAdjacentCorpse();
+  }, [myToken, room.portalPosition, room.bossDefeated, room.tokens, room.gatherables, room.chests, currentMap.obstacles, currentMap.portalPosition, socket, lootAdjacentCorpse]);
+
+  const triggerHotkey = useCallback((slot) => {
+    if (!myChar || !myToken) return;
+    const now = Date.now();
+    if (hotkeyCooldowns[slot] && now < hotkeyCooldowns[slot]) {
+      return;
+    }
+
+    if (slot === 1) {
+      // Hotkey 1: Exura (Cura Rápida)
+      const healAmt = Math.floor(Math.random() * 7) + 4;
+      const newHp = Math.min(myChar.maxHp, (myChar.hp || 0) + healAmt);
+      sounds.playHeal();
+      setHotkeyCooldowns(prev => ({ ...prev, 1: now + 1500 }));
+      socket.emit('character:update', { character: { ...myChar, hp: newHp } });
+      socket.emit('combat:visual_effect', {
+        fromX: myToken.x,
+        fromY: myToken.y,
+        toX: myToken.x,
+        toY: myToken.y,
+        text: `✨ +${healAmt} PV (Exura)`,
+        color: '#10B981',
+        effectType: 'heal'
+      });
+      socket.emit('chat:send', {
+        sender: myChar.name,
+        senderType: 'player',
+        type: 'chat',
+        content: `✨ **${myChar.name}** bradou ***Exura!*** e recuperou **+${healAmt} PV**!`
+      });
+    } else if (slot === 2) {
+      // Hotkey 2: Exori (Golpe em Área ao Redor)
+      setHotkeyCooldowns(prev => ({ ...prev, 2: now + 3500 }));
+      sounds.playAttack();
+      socket.emit('tibia:exori', { actorTokenId: myToken.id });
+    } else if (slot === 3) {
+      // Hotkey 3: Exori Flam (Lança Chamas no Alvo Selecionado)
+      if (!selectedTarget || selectedTarget.type !== 'enemy') {
+        setActionAlert('Selecione um inimigo para lançar Exori Flam!');
+        return;
+      }
+      setHotkeyCooldowns(prev => ({ ...prev, 3: now + 2000 }));
+      sounds.playSpell();
+      executeCombatAction('spell', {
+        name: 'Exori Flam',
+        damage: '2d6+3',
+        damageType: 'fogo',
+        range: 12
+      });
+    } else if (slot === 4) {
+      // Hotkey 4: Poção de Vida
+      setHotkeyCooldowns(prev => ({ ...prev, 4: now + 1000 }));
+      handleQuickPotion();
+    } else if (slot === 5) {
+      // Hotkey 5: Utevo Hur (Haste - Acelera Movimento)
+      setHotkeyCooldowns(prev => ({ ...prev, 5: now + 10000 }));
+      setHasteUntil(now + 8000);
+      sounds.playSpell();
+      socket.emit('combat:visual_effect', {
+        fromX: myToken.x,
+        fromY: myToken.y,
+        toX: myToken.x,
+        toY: myToken.y,
+        text: `⚡ UTEVO HUR! (+50% Vel)`,
+        color: '#38BDF8',
+        effectType: 'heal'
+      });
+      socket.emit('chat:send', {
+        sender: myChar.name,
+        senderType: 'player',
+        type: 'chat',
+        content: `⚡ **${myChar.name}** bradou ***Utevo Hur!*** Seus passos agora são ultra-rápidos!`
+      });
+    }
+  }, [myChar, myToken, hotkeyCooldowns, selectedTarget, socket, executeCombatAction, handleQuickPotion]);
+
+  // Keyboard navigation & Tibia Hotkeys
+  useEffect(() => {
+    if (!tibiaMode) return;
+
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      const now = Date.now();
+      const isHaste = now < hasteUntil;
+      const stepDelay = isHaste ? 130 : 200;
+
+      let dx = 0;
+      let dy = 0;
+
+      switch (e.code) {
+        case 'KeyW':
+        case 'ArrowUp':
+        case 'Numpad8':
+          dy = -1;
+          break;
+        case 'KeyS':
+        case 'ArrowDown':
+        case 'Numpad2':
+          dy = 1;
+          break;
+        case 'KeyA':
+        case 'ArrowLeft':
+        case 'Numpad4':
+          dx = -1;
+          break;
+        case 'KeyD':
+        case 'ArrowRight':
+        case 'Numpad6':
+          dx = 1;
+          break;
+        case 'Numpad7':
+        case 'KeyQ':
+          dx = -1; dy = -1;
+          break;
+        case 'Numpad9':
+          dx = 1; dy = -1;
+          break;
+        case 'Numpad1':
+        case 'KeyZ':
+          dx = -1; dy = 1;
+          break;
+        case 'Numpad3':
+        case 'KeyC':
+          dx = 1; dy = 1;
+          break;
+
+        case 'Digit1':
+          e.preventDefault();
+          triggerHotkey(1);
+          return;
+        case 'Digit2':
+          e.preventDefault();
+          triggerHotkey(2);
+          return;
+        case 'Digit3':
+          e.preventDefault();
+          triggerHotkey(3);
+          return;
+        case 'Digit4':
+          e.preventDefault();
+          triggerHotkey(4);
+          return;
+        case 'Digit5':
+          e.preventDefault();
+          triggerHotkey(5);
+          return;
+
+        case 'Space':
+          e.preventDefault();
+          targetNearestEnemy();
+          return;
+
+        case 'Escape':
+          setSelectedTarget(null);
+          return;
+
+        case 'KeyE':
+        case 'KeyL':
+        case 'KeyF':
+          e.preventDefault();
+          handleActionKeyE();
+          return;
+
+        default:
+          return;
+      }
+
+      if (dx !== 0 || dy !== 0) {
+        e.preventDefault();
+        if (!myToken || !socket) return;
+        if (now - lastStepTimeRef.current < stepDelay) return;
+
+        const cur = myTokenPosRef.current;
+        const newX = cur.x + dx;
+        const newY = cur.y + dy;
+
+        // Collision check with walls & pillars
+        if (isTileBlocked(newX, newY, currentMap.obstacles, cols, rows)) {
+          return;
+        }
+
+        if (newX !== cur.x || newY !== cur.y) {
+          lastStepTimeRef.current = now;
+          myTokenPosRef.current = { x: newX, y: newY };
+          myToken.x = newX;
+          myToken.y = newY;
+          socket.emit('token:move', { tokenId: myToken.id, x: newX, y: newY });
+          if (cameraFollow) centerOnGrid(newX, newY);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [tibiaMode, myToken, socket, cols, rows, cameraFollow, hasteUntil, triggerHotkey, targetNearestEnemy, handleActionKeyE, room.combat, currentMap.obstacles]);
+
+  // Real-Time Auto-Attack Loop
+  useEffect(() => {
+    if (!tibiaMode || !autoAttack || !myToken || !selectedTarget || selectedTarget.type !== 'enemy') return;
+    if ((selectedTarget.hp || 0) <= 0) return;
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      if (now - lastAttackTime < 1800) return;
+
+      const distSquares = Math.max(Math.abs(selectedTarget.x - myToken.x), Math.abs(selectedTarget.y - myToken.y));
+      const distMeters = distSquares * 1.5;
+
+      const mainWeapon = myWeapons[0] || { name: 'Ataque Desarmado', damage: '1d4', range: 1.5, type: 'weapon' };
+      const maxRange = mainWeapon.range || (mainWeapon.properties?.some(p => p.includes('Munição') || p.includes('Arremesso')) ? 18 : 1.5);
+
+      if (distMeters <= maxRange + 0.5) {
+        setLastAttackTime(now);
+        executeCombatAction('weapon', mainWeapon);
+      }
+    }, 250);
+
+    return () => clearInterval(interval);
+  }, [tibiaMode, autoAttack, myToken, selectedTarget, lastAttackTime, myWeapons, executeCombatAction]);
+
   return (
     <div 
       ref={containerRef} 
@@ -760,6 +1447,60 @@ export default function BattleMap({
 
       {/* TOP BAR: INITIATIVE TRACKER + AUTO-DM + MISSIONS */}
       <div className="absolute top-3 left-1/2 -translate-x-1/2 flex flex-wrap items-center justify-center gap-2 z-30 max-w-[95vw]">
+        {/* Tibia Mode Toggle */}
+        <button
+          onClick={() => setTibiaMode(!tibiaMode)}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs font-black shadow-lg backdrop-blur transition ${
+            tibiaMode
+              ? 'bg-amber-950/90 border-amber-500 text-amber-300 ring-1 ring-amber-500'
+              : 'bg-dnd-panel/90 border-dnd-border text-gray-400 hover:text-white'
+          }`}
+          title="Modo Tibia: Movimentação livre por WASD/Setas, Auto-Ataque contínuo, Hotkeys 1-5 e Cadáveres com Loot!"
+        >
+          <span>🗡️ Tibia: {tibiaMode ? 'ATIVO (WASD)' : 'OFF'}</span>
+        </button>
+
+        {/* Camera Follow Toggle */}
+        <button
+          onClick={() => setCameraFollow(!cameraFollow)}
+          className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-bold shadow-lg backdrop-blur transition ${
+            cameraFollow
+              ? 'bg-blue-950/90 border-blue-500 text-blue-300'
+              : 'bg-dnd-panel/90 border-dnd-border text-gray-400 hover:text-white'
+          }`}
+          title="Manter a câmera centralizada no herói enquanto se movimenta"
+        >
+          <Target className="w-3.5 h-3.5 text-blue-400" />
+          <span>Câmera: {cameraFollow ? 'Seguindo' : 'Livre'}</span>
+        </button>
+
+        {/* Respawn Monsters Button */}
+        <button
+          onClick={() => {
+            sounds.playAttack();
+            socket.emit('room:respawn_monsters');
+          }}
+          className="flex items-center space-x-1.5 bg-red-950/90 hover:bg-red-900 border border-red-500 text-red-200 px-3 py-1.5 rounded-xl text-xs font-bold shadow-lg transition"
+          title="Invocar horda de monstros para caçar (Respawn contínuo estilo Tibia)"
+        >
+          <Skull className="w-3.5 h-3.5 text-red-400" />
+          <span>Respawn</span>
+        </button>
+
+        {/* Toggle Battle List Button */}
+        <button
+          onClick={() => setShowBattleList(!showBattleList)}
+          className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-bold shadow-lg backdrop-blur transition ${
+            showBattleList
+              ? 'bg-red-950/90 border-red-500 text-red-300'
+              : 'bg-dnd-panel/90 border-dnd-border text-gray-400 hover:text-white'
+          }`}
+          title="Alternar exibição da Lista de Batalha (Inimigos próximos)"
+        >
+          <Swords className="w-3.5 h-3.5 text-red-400" />
+          <span>Batalha ({enemies.length})</span>
+        </button>
+
         {/* Auto-DM Toggle Button */}
         <button
           onClick={() => socket.emit('autodm:toggle', { enabled: !room.autoDM })}
@@ -783,74 +1524,86 @@ export default function BattleMap({
           <span>Missões & Gerar Inimigos</span>
         </button>
 
-        {/* Combat Turn Controls */}
-        <div className="flex items-center bg-dnd-panel/95 backdrop-blur border border-dnd-border rounded-xl px-2.5 py-1 shadow-xl space-x-2">
-          {!room.combat?.active ? (
+        {/* DM Fog of War Controls */}
+        {isDM && (
+          <div className="flex items-center space-x-1.5 bg-dnd-panel/95 backdrop-blur border border-purple-900/60 rounded-xl px-2.5 py-1 shadow-xl">
             <button
-              onClick={() => {
-                sounds.playDiceRoll();
-                socket.emit('combat:start', {});
-              }}
-              className="flex items-center space-x-1.5 bg-red-700 hover:bg-red-600 text-white px-3 py-1 rounded-lg text-xs font-bold transition shadow"
+              onClick={() => socket.emit('fog:toggle_enabled', { enabled: !room.fogEnabled })}
+              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition ${
+                room.fogEnabled
+                  ? 'bg-purple-950/90 border border-purple-500 text-purple-300 shadow'
+                  : 'text-gray-400 hover:text-white hover:bg-dnd-hover'
+              }`}
+              title="Ativar ou desativar Neblina de Guerra no mapa"
             >
-              <Swords className="w-3.5 h-3.5" />
-              <span>Iniciar Combate (Rolar Iniciativa)</span>
+              {room.fogEnabled ? <EyeOff className="w-3.5 h-3.5 text-purple-400" /> : <Eye className="w-3.5 h-3.5" />}
+              <span>Neblina: {room.fogEnabled ? 'ATIVA' : 'OFF'}</span>
             </button>
-          ) : (
-            <div className="flex items-center space-x-2">
-              <span className="text-[11px] font-cinzel font-bold text-amber-400 px-1.5">
-                Rodada {room.combat.round}
-              </span>
 
-              {/* Mini Turn Order Avatars */}
-              <div className="flex items-center space-x-1 max-w-xs overflow-x-auto py-0.5">
-                {room.combat.turnOrder.map((tid, idx) => {
-                  const tok = (room.tokens || []).find(t => t.id === tid);
-                  if (!tok) return null;
-                  const isCurrent = idx === room.combat.currentTurnIndex;
-                  return (
-                    <div
-                      key={tid}
+            {room.fogEnabled && (
+              <>
+                <button
+                  onClick={() => setFogBrush(b => b === 'reveal' ? null : 'reveal')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition border ${
+                    fogBrush === 'reveal'
+                      ? 'bg-emerald-600 border-emerald-400 text-white'
+                      : 'border-dnd-border text-gray-300 hover:bg-dnd-hover'
+                  }`}
+                  title="Pincel Revelar: Clique ou arraste no mapa para dissipar a névoa"
+                >
+                  Revelar
+                </button>
+                <button
+                  onClick={() => setFogBrush(b => b === 'hide' ? null : 'hide')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition border ${
+                    fogBrush === 'hide'
+                      ? 'bg-red-600 border-red-400 text-white'
+                      : 'border-dnd-border text-gray-300 hover:bg-dnd-hover'
+                  }`}
+                  title="Pincel Ocultar: Clique ou arraste no mapa para cobrir com névoa"
+                >
+                  Ocultar
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Status MMORPG Tempo Real (Sem Turnos • Aggro por Proximidade <= 2q) */}
+        <div className="flex items-center bg-dnd-panel/95 backdrop-blur border border-dnd-border rounded-xl px-3 py-1.5 shadow-xl space-x-2.5">
+          {(() => {
+            const chasingMonsters = enemies.filter(e => e.aggroTargetId && (e.hp || 0) > 0);
+            return chasingMonsters.length > 0 ? (
+              <div className="flex items-center space-x-2">
+                <span className="flex items-center gap-1.5 text-xs font-bold text-red-400 animate-pulse">
+                  <Swords className="w-3.5 h-3.5 text-red-500" />
+                  <span>❗ {chasingMonsters.length} {chasingMonsters.length === 1 ? 'Inimigo Perseguindo!' : 'Inimigos Perseguindo!'}</span>
+                </span>
+                <div className="flex items-center space-x-1 max-w-xs overflow-x-auto">
+                  {chasingMonsters.map(m => (
+                    <button
+                      key={m.id}
                       onClick={() => {
-                        setSelectedTarget(tok);
-                        centerOnGrid(tok.x, tok.y);
+                        setSelectedTarget(m);
+                        centerOnGrid(m.x, m.y);
                       }}
-                      className={`cursor-pointer px-2 py-0.5 rounded-lg text-xs flex items-center space-x-1 border transition ${
-                        isCurrent
-                          ? 'bg-amber-500 text-black font-bold border-white scale-105 shadow'
-                          : tok.type === 'enemy'
-                          ? 'bg-red-950/60 border-red-800 text-red-200'
-                          : 'bg-blue-950/60 border-blue-800 text-blue-200'
-                      }`}
-                      title={`${tok.name} (PV: ${tok.hp}/${tok.maxHp})`}
+                      className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-red-950/80 border border-red-600 text-red-200 hover:bg-red-900 transition flex items-center space-x-1"
+                      title={`Focar em ${m.name} (${m.hp}/${m.maxHp} PV)`}
                     >
-                      <span>{tok.avatar}</span>
-                      <span className="truncate max-w-[70px] text-[10px]">{tok.name.split(' ')[0]}</span>
-                    </div>
-                  );
-                })}
+                      <span>{m.avatar}</span>
+                      <span className="truncate max-w-[75px]">{m.name.split(' ')[0]}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
-
-              <button
-                onClick={() => {
-                  sounds.playDiceRoll();
-                  socket.emit('combat:next');
-                }}
-                className="flex items-center space-x-1 bg-dnd-gold hover:bg-amber-400 text-black px-2.5 py-1 rounded-lg text-xs font-bold transition shadow"
-              >
-                <span>Passar Turno</span>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-
-              <button
-                onClick={() => socket.emit('combat:end')}
-                className="text-[10px] text-gray-400 hover:text-red-400 px-1.5"
-                title="Encerrar Combate"
-              >
-                Fim
-              </button>
-            </div>
-          )}
+            ) : (
+              <div className="flex items-center space-x-1.5 text-xs text-emerald-400 font-semibold" title="Aproxime-se a até 2 quadrados de um monstro para atrair o aggro dele em tempo real!">
+                <Zap className="w-3.5 h-3.5 text-amber-400" />
+                <span>MMORPG Tempo Real</span>
+                <span className="text-[10px] text-gray-400 font-normal">• Aggro: 2 quadrados</span>
+              </div>
+            );
+          })()}
         </div>
       </div>
 
@@ -1141,6 +1894,96 @@ export default function BattleMap({
               <span>🧪 Poção ({myPotionsCount})</span>
               <span className="text-[9px] text-emerald-400 font-mono">+2d4+2 PV</span>
             </button>
+
+            {/* TIBIA HOTBAR (1 a 5) & AUTO-ATTACK */}
+            <div className="flex items-center space-x-1.5 pl-2.5 border-l-2 border-amber-600/60">
+              {/* Auto-Attack Toggle */}
+              <button
+                onClick={() => setAutoAttack(!autoAttack)}
+                className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex flex-col items-center transition ${
+                  autoAttack
+                    ? 'bg-amber-950/90 border-amber-500 text-amber-200'
+                    : 'bg-dnd-darker border-dnd-border text-gray-400'
+                }`}
+                title="Auto-Ataque: Quando ativo, golpeia o inimigo selecionado a cada 1.8s ao estar no alcance"
+              >
+                <div className="flex items-center space-x-1">
+                  <Swords className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Auto-Atk</span>
+                </div>
+                <span className="text-[9px] text-amber-300 font-mono">{autoAttack ? 'ATIVO' : 'OFF'}</span>
+              </button>
+
+              {/* Hotkey 1: Exura */}
+              <button
+                onClick={() => triggerHotkey(1)}
+                className="relative px-2.5 py-1.5 bg-emerald-950/90 hover:bg-emerald-900 border border-emerald-500 text-emerald-200 rounded-xl font-bold text-xs flex flex-col items-center shadow transition"
+                title="Atalho [1]: Exura (Cura Rápida)"
+              >
+                <span className="text-[8px] bg-black/70 px-1 rounded text-gray-300 font-mono absolute -top-1 -left-1 border border-emerald-700">1</span>
+                <span>✨ Exura</span>
+                <span className="text-[9px] text-emerald-300 font-mono">+2d4+2 PV</span>
+              </button>
+
+              {/* Hotkey 2: Exori */}
+              <button
+                onClick={() => triggerHotkey(2)}
+                className="relative px-2.5 py-1.5 bg-red-950/90 hover:bg-red-900 border border-red-500 text-red-200 rounded-xl font-bold text-xs flex flex-col items-center shadow transition"
+                title="Atalho [2]: Exori (Golpe em Área em todos ao redor)"
+              >
+                <span className="text-[8px] bg-black/70 px-1 rounded text-gray-300 font-mono absolute -top-1 -left-1 border border-red-700">2</span>
+                <span>⚔️ Exori</span>
+                <span className="text-[9px] text-red-300 font-mono">1d8+Mod</span>
+              </button>
+
+              {/* Hotkey 3: Exori Flam */}
+              <button
+                onClick={() => triggerHotkey(3)}
+                className="relative px-2.5 py-1.5 bg-amber-950/90 hover:bg-amber-900 border border-amber-500 text-amber-200 rounded-xl font-bold text-xs flex flex-col items-center shadow transition"
+                title="Atalho [3]: Exori Flam (Lança Chamas no Alvo Selecionado)"
+              >
+                <span className="text-[8px] bg-black/70 px-1 rounded text-gray-300 font-mono absolute -top-1 -left-1 border border-amber-700">3</span>
+                <span>🔥 Flam</span>
+                <span className="text-[9px] text-amber-300 font-mono">2d6+3</span>
+              </button>
+
+              {/* Hotkey 4: Poção */}
+              <button
+                onClick={() => triggerHotkey(4)}
+                className="relative px-2.5 py-1.5 bg-blue-950/90 hover:bg-blue-900 border border-blue-500 text-blue-200 rounded-xl font-bold text-xs flex flex-col items-center shadow transition"
+                title="Atalho [4]: Beber Poção de Vida da Mochila"
+              >
+                <span className="text-[8px] bg-black/70 px-1 rounded text-gray-300 font-mono absolute -top-1 -left-1 border border-blue-700">4</span>
+                <span>🧪 Poção</span>
+                <span className="text-[9px] text-blue-300 font-mono">x{myPotionsCount}</span>
+              </button>
+
+              {/* Hotkey 5: Utevo Hur */}
+              <button
+                onClick={() => triggerHotkey(5)}
+                className={`relative px-2.5 py-1.5 border rounded-xl font-bold text-xs flex flex-col items-center shadow transition ${
+                  Date.now() < hasteUntil
+                    ? 'bg-cyan-950/90 border-cyan-400 text-cyan-200 animate-pulse'
+                    : 'bg-dnd-darker border-dnd-border text-gray-300 hover:text-white'
+                }`}
+                title="Atalho [5]: Utevo Hur (Haste - Acelera Movimento por 8s)"
+              >
+                <span className="text-[8px] bg-black/70 px-1 rounded text-gray-300 font-mono absolute -top-1 -left-1 border border-cyan-700">5</span>
+                <span>⚡ Hur</span>
+                <span className="text-[9px] text-cyan-300 font-mono">+50% Vel</span>
+              </button>
+
+              {/* Action Key [E] Shortcut Button */}
+              <button
+                onClick={handleActionKeyE}
+                className="relative px-2.5 py-1.5 bg-purple-950/90 hover:bg-purple-900 border border-purple-500 text-purple-200 rounded-xl font-bold text-xs flex flex-col items-center shadow transition"
+                title="Atalho [E] no teclado: Interagir com Baús de Tesouro, Altares Rúnicos e Cadáveres adjacentes!"
+              >
+                <span className="text-[8px] bg-black/70 px-1 rounded text-purple-300 font-mono absolute -top-1 -left-1 border border-purple-700">E</span>
+                <span>✨ Ação [E]</span>
+                <span className="text-[9px] text-purple-300 font-mono">Interagir</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1255,6 +2098,146 @@ export default function BattleMap({
                     </button>
                   ))}
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RETRO TIBIA LOOT MODAL */}
+      {lootModalCorpse && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-dnd-panel border-2 border-amber-500 rounded-2xl w-full max-w-sm p-4 shadow-2xl animate-scaleUp">
+            <div className="flex items-center justify-between pb-2 border-b border-dnd-border mb-3">
+              <div className="flex items-center space-x-2">
+                <span className="text-2xl">{lootModalCorpse.opened ? '🦴' : '💀'}</span>
+                <div>
+                  <h3 className="font-cinzel font-bold text-sm text-dnd-gold">{lootModalCorpse.name}</h3>
+                  <p className="text-[10px] text-gray-400">Conteúdo do Cadáver</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setLootModalCorpse(null)}
+                className="text-gray-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-dnd-darker rounded-xl p-3 border border-dnd-border mb-4 space-y-2">
+              {lootModalCorpse.opened ? (
+                <div className="text-center py-4 text-xs text-gray-400 italic">
+                  O cadáver já foi saqueado e está vazio.
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-amber-950/40 border border-amber-600/50 text-amber-200 text-xs font-bold">
+                    <span className="flex items-center space-x-2">
+                      <span className="text-lg">🪙</span>
+                      <span>Moedas de Ouro</span>
+                    </span>
+                    <span className="font-mono text-sm font-bold text-amber-400">+{lootModalCorpse.gold || 0} PO</span>
+                  </div>
+
+                  {(lootModalCorpse.items || []).map((it, idx) => (
+                    <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-dnd-panel border border-dnd-border text-gray-200 text-xs font-bold">
+                      <span className="flex items-center space-x-2">
+                        <span className="text-lg">🗡️</span>
+                        <span>{it.name}</span>
+                      </span>
+                      <span className="text-[10px] text-dnd-gold font-mono">{it.damage || it.heal || it.type}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+
+            {!lootModalCorpse.opened && (
+              <button
+                onClick={() => {
+                  sounds.playCoins();
+                  socket.emit('corpse:loot', { corpseId: lootModalCorpse.id });
+                  setLootModalCorpse(null);
+                }}
+                className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-black text-xs rounded-xl shadow-lg flex items-center justify-center space-x-2 transition"
+              >
+                <span>💰 Pegar Tudo (Loot All)</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* STORY QUEST HUD & RELIC PROGRESS */}
+      <StoryQuestHUD
+        currentLandId={room.currentLandId || 'land_forest'}
+        bossDefeated={room.bossDefeated}
+        collectedRelics={room.collectedRelics || []}
+        onOpenStoryModal={() => setShowStoryLoreModal(true)}
+      />
+
+      {/* NPC DIALOGUE & INTERACTION MODAL */}
+      {activeDialogueNpc && (
+        <NPCDialogueModal
+          npc={activeDialogueNpc}
+          onClose={() => setActiveDialogueNpc(null)}
+          onOpenShop={(npc) => {
+            if (socket) {
+              socket.emit('chat:send', {
+                sender: npc.name,
+                senderType: 'system',
+                content: `🛒 **${npc.name}** abriu seus suprimentos! Cliquem no Mercado na barra superior para comprar ou vender equipamentos.`
+              });
+            }
+          }}
+          onFullHeal={() => {
+            if (myChar && socket) {
+              myChar.hp = myChar.maxHp;
+              socket.emit('character:update', { character: { ...myChar, hp: myChar.maxHp } });
+              sounds.playHeal();
+            }
+          }}
+        />
+      )}
+
+      {/* COMPLETE STORY LORE MODAL */}
+      {showStoryLoreModal && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-dnd-panel border-2 border-dnd-gold rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="bg-dnd-darker border-b border-dnd-border px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <span className="text-2xl">📜</span>
+                <div>
+                  <h3 className="font-cinzel font-bold text-lg text-dnd-gold">{STORY_CAMPAIGN.title}</h3>
+                  <p className="text-xs text-gray-400">Crônicas das Quatro Terras de Eldoria</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowStoryLoreModal(false)}
+                className="text-gray-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-4 text-sm text-gray-200">
+              <p className="italic text-amber-200/90 leading-relaxed bg-amber-950/20 border border-amber-500/20 p-3 rounded-xl font-serif">
+                "{STORY_CAMPAIGN.synopsis}"
+              </p>
+
+              <div className="space-y-3 pt-2">
+                {STORY_CAMPAIGN.lands.map((l, i) => (
+                  <div key={l.id} className="p-3.5 bg-dnd-darker border border-dnd-border rounded-xl">
+                    <div className="flex items-center justify-between font-bold text-dnd-gold text-xs mb-1">
+                      <span>Land {i + 1}: {l.name}</span>
+                      <span className="text-red-400">Boss: {l.bossName}</span>
+                    </div>
+                    <p className="text-xs text-gray-400 mb-2">{l.description}</p>
+                    <div className="text-[11px] text-emerald-400 bg-emerald-950/30 px-2 py-1 rounded border border-emerald-800/40">
+                      🏆 Recompensa: {l.relicReward.name} ({l.relicReward.icon}) — {l.relicReward.desc}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

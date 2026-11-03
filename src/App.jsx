@@ -13,21 +13,44 @@ import { sounds } from './utils/soundEffects';
 
 export default function App() {
   const [socket, setSocket] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
   const [inGame, setInGame] = useState(false);
   const [room, setRoom] = useState(null);
   const [isDM, setIsDM] = useState(false);
   const [myPlayerId, setMyPlayerId] = useState(null);
   const [activeTab, setActiveTab] = useState('map');
   const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [socketError, setSocketError] = useState(null);
 
   useEffect(() => {
-    const socketUrl = window.location.port === '5173' ? 'http://localhost:3001' : window.location.origin;
+    // Connect to backend server on port 3001 if on dev server or custom port
+    const isDev = window.location.port !== '3001' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    const socketUrl = isDev ? 'http://localhost:3001' : window.location.origin;
+
     const newSocket = io(socketUrl, {
-      transports: ['websocket', 'polling']
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 30,
+      reconnectionDelay: 1000
     });
 
     newSocket.on('connect', () => {
-      console.log('[Socket] Conectado:', newSocket.id);
+      console.log('[Socket] Conectado ao servidor:', newSocket.id);
+      setIsConnected(true);
+      setSocketError(null);
+    });
+
+    newSocket.on('disconnect', () => {
+      console.log('[Socket] Desconectado do servidor');
+      setIsConnected(false);
+    });
+
+    newSocket.on('connect_error', () => {
+      setIsConnected(false);
+    });
+
+    newSocket.on('room:error', ({ message } = {}) => {
+      setSocketError(message || 'Erro ao entrar na sala');
     });
 
     newSocket.on('room:state', (roomState) => {
@@ -35,6 +58,7 @@ export default function App() {
       setIsDM(roomState.isDM);
       setMyPlayerId(roomState.myPlayerId);
       setInGame(true);
+      setSocketError(null);
     });
 
     newSocket.on('room:player_joined', ({ players, tokens }) => {
@@ -45,10 +69,12 @@ export default function App() {
       setRoom(prev => prev ? { ...prev, tokens } : prev);
     });
 
-    newSocket.on('room:token_moved', ({ tokenId, x, y }) => {
+    newSocket.on('room:token_moved', ({ tokenId, x, y, aggroTargetId }) => {
       setRoom(prev => {
         if (!prev) return prev;
-        const updatedTokens = prev.tokens.map(t => t.id === tokenId ? { ...t, x, y } : t);
+        const updatedTokens = prev.tokens.map(t =>
+          t.id === tokenId ? { ...t, x, y, ...(aggroTargetId !== undefined ? { aggroTargetId } : {}) } : t
+        );
         return { ...prev, tokens: updatedTokens };
       });
     });
@@ -59,6 +85,35 @@ export default function App() {
 
     newSocket.on('room:chests_updated', (chests) => {
       setRoom(prev => prev ? { ...prev, chests } : prev);
+    });
+
+    newSocket.on('room:gatherables_updated', (gatherables) => {
+      setRoom(prev => prev ? { ...prev, gatherables } : prev);
+    });
+
+    newSocket.on('room:boss_defeated', ({ relic } = {}) => {
+      setRoom(prev => {
+        if (!prev) return prev;
+        const relics = [...(prev.collectedRelics || [])];
+        if (relic?.id && !relics.includes(relic.id)) relics.push(relic.id);
+        return { ...prev, bossDefeated: true, collectedRelics: relics };
+      });
+    });
+
+    newSocket.on('room:land_advanced', ({ landId, portalPosition, portalName, relics } = {}) => {
+      setRoom(prev => prev ? {
+        ...prev,
+        currentLandId: landId,
+        currentAdventureId: landId,
+        bossDefeated: false,
+        portalPosition: portalPosition || prev.portalPosition,
+        portalName: portalName || prev.portalName,
+        collectedRelics: relics || prev.collectedRelics
+      } : prev);
+    });
+
+    newSocket.on('room:corpses_updated', (corpses) => {
+      setRoom(prev => prev ? { ...prev, corpses } : prev);
     });
 
     newSocket.on('room:autodm_updated', (autoDM) => {
@@ -115,7 +170,10 @@ export default function App() {
   }, []);
 
   const handleJoin = ({ roomId, playerName, role, dmPass, character }) => {
-    if (!socket) return;
+    if (!socket || !socket.connected) {
+      setSocketError('O servidor de jogo não está rodando na porta 3001. Execute "node server/index.js" no terminal.');
+      return;
+    }
     sounds.init();
     socket.emit('room:join', { roomId, playerName, role, dmPass, character });
   };
@@ -136,7 +194,13 @@ export default function App() {
   const myPlayer = room?.players?.[myPlayerId] || null;
 
   if (!inGame || !room) {
-    return <Lobby onJoin={handleJoin} />;
+    return (
+      <Lobby
+        onJoin={handleJoin}
+        isConnected={isConnected}
+        socketError={socketError}
+      />
+    );
   }
 
   return (

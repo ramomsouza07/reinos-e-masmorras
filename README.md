@@ -48,6 +48,29 @@ Um jogo de RPG de mesa virtual (Virtual Tabletop - VTT) completo para navegador,
 - Efeitos sonoros procedurais via Web Audio API (dados rolando, espadas, magias, moedas e fanfarras).
 - Animação de confetes dourados no **20 Natural** e alerta vermelho no **1 Natural**.
 
+### 8. 🗡️ Modo Ação & Exploração Fluida (Estilo Baldur's Gate 3)
+- **Transição Automática (Aggro System)**: Fora de combate, os jogadores exploram a masmorra livremente em tempo real. Se um herói entrar no campo de visão de um monstro (9 metros / 6 quadrados), um alerta sonoro e visual `[!]` é disparado e toda a mesa entra automaticamente em combate tático por turnos com iniciativa rolada na hora!
+- **Fuga Estratégica**: Se o grupo recuar mais de 18 metros (12 quadrados) de todos os inimigos vivos, o combate desarma sozinho e o grupo volta à exploração livre.
+- **Navegação Inteligente por Clique (Pathfinding A\*)**: Clique no chão para traçar a rota mais curta contornando paredes, pilares e obstáculos. Durante o combate por turnos, a linha de rota exibe os metros e limita o movimento ao deslocamento restante da rodada.
+- **Linha de Visão (Line-of-Sight)**: Tiros de flechas e raios de magia não atravessam paredes sólidas ou pilares de pedra; posicione-se estrategicamente para acertar o alvo!
+- **Combate Rápido em 1 Clique (Fast-Turn)**: Clique no alvo ou arma para rolar d20 e dano simultaneamente, com os monstros do AutoDM agindo em menos de 500ms.
+
+### 9. 🎨 Nova Estética Procedural do Mapa & Game Juice
+- **Texturas Procedurais Vivas**:
+  - *Masmorras*: Lajotas de pedra talhadas com chanfros, rachaduras sutis e musgo.
+  - *Taverna*: Tábuas de madeira com veios, nós e pregos de fixação.
+  - *Floresta*: Terra batida com tufos de grama estilizados e seixos orgânicos.
+  - *Caverna Carmesim*: Basalto vulcânico escuro com fissuras de magma brilhante pulsando sob o chão.
+- **Paredes & Pilares 3D com Sombras**: Tijolos de pedra empilhados em relevo com topo chanfrado e sombras projetadas no chão.
+- **Iluminação & Vinheta**: Luz radial quente e cintilante ao redor das tochas com vinheta escura dramática nas bordas da masmorra.
+- **Projéteis Visuais em Voo**: Flechas com penas de cauda, bolas de fogo com rastro incandescente e projéteis arcanos voando graficamente pelo Canvas.
+- **Floating Combat Text & Screen Shake**: Números de dano/cura saltando no ar com tremor de tela sutil em acertos críticos e explosões!
+
+### 10. ⚡ Interações com o Cenário (Tecla de Ação [E])
+- **Baús de Tesouro**: Aproxime-se e pressione `[E]` para abrir. Cuidado: 25% dos baús estão protegidos por **Armadilhas Explosivas (2d6 em área)** com screen shake e detonação mágica!
+- **Altares Rúnicos Ancestrais**: Pressione `[E]` adjacente ao altar para rezar e receber a **Bênção Ancestral** (+2 de dano, cura e bônus de atributos por 30s).
+- **Cadáveres no Chão**: Pressione `[E]` para pilhar ouro e equipamentos deixados pelos monstros.
+
 ---
 
 ## 🚀 Como Iniciar o Jogo

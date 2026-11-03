@@ -1,4 +1,6 @@
 // Base de Dados Oficial D&D 5ª Edição em Português (Expandida)
+import { STORY_CAMPAIGN } from './storyCampaign.js';
+export { STORY_CAMPAIGN };
 
 export const ABILITIES = [
   { 
@@ -341,6 +343,30 @@ export const ITEMS = {
   foco_arcano: { id: 'foco_arcano', name: 'Orbe Arcano', type: 'gear', cost: 20, currency: 'PO', desc: 'Canalizador de feitiços arcanos.', weight: 0.5 },
   flauta: { id: 'flauta', name: 'Alaúde / Flauta Élfica', type: 'gear', cost: 12, currency: 'PO', desc: 'Instrumento musical mágico.', weight: 0.5 },
 
+  // Armas e Equipamentos por Tier / Land
+  espada_curta_afiada: { id: 'espada_curta_afiada', name: 'Espada Curta Afiada (+1)', type: 'weapon', cost: 25, currency: 'PO', damage: '1d6+1', damageType: 'perfurante', range: 1.5, properties: ['Finesse', 'Leve'], weight: 1 },
+  arco_cacador: { id: 'arco_cacador', name: 'Arco do Caçador Florestal', type: 'weapon', cost: 40, currency: 'PO', damage: '1d6+1', damageType: 'perfurante', range: 20, properties: ['Munição', 'Duas Mãos'], weight: 1 },
+  adaga_silenciosa: { id: 'adaga_silenciosa', name: 'Adaga Silenciosa da Sombra', type: 'weapon', cost: 30, currency: 'PO', damage: '1d4+2', damageType: 'perfurante', range: 6, properties: ['Finesse', 'Leve', 'Crítico Expandido'], weight: 0.5 },
+  escudo_madeira: { id: 'escudo_madeira', name: 'Escudo de Carvalho Reforçado (+2 CA)', type: 'shield', cost: 10, currency: 'PO', acBonus: 2, weight: 2 },
+  pocao_cura_pequena: { id: 'pocao_cura_pequena', name: 'Poção de Ervas Medicinais (1d6+2)', type: 'consumable', cost: 15, currency: 'PO', heal: '1d6+2', desc: 'Extrato de ervas da floresta que restaura 1d6+2 PV.', weight: 0.2 },
+  
+  // Tier 2 (Pântano)
+  espada_longa_aco: { id: 'espada_longa_aco', name: 'Espada Longa de Aço Temperado (+2)', type: 'weapon', cost: 70, currency: 'PO', damage: '1d8+2', damageType: 'cortante', range: 1.5, properties: ['Versátil (1d10+2)'], weight: 1.5 },
+  cota_malha_reforcada: { id: 'cota_malha_reforcada', name: 'Cota de Malha Revestida', type: 'armor', cost: 120, currency: 'PO', ac: 17, addDex: false, weight: 22, category: 'Pesada' },
+  manto_pantano: { id: 'manto_pantano', name: 'Manto das Névoas (+1 CA, +5 PV)', type: 'magic', cost: 90, currency: 'PO', acBonus: 1, hpBonus: 5, desc: 'Protege contra toxinas e eleva a vitalidade.', weight: 0.5, magic: true },
+  elixir_antidoto: { id: 'elixir_antidoto', name: 'Elixir Antídoto de Baba Morwenna', type: 'consumable', cost: 35, currency: 'PO', heal: '2d4+4', desc: 'Neutraliza qualquer veneno e restaura 2d4+4 PV.', weight: 0.2 },
+
+  // Tier 3 (Cavernas de Cristal)
+  machado_cristal: { id: 'machado_cristal', name: 'Machado Vorpal de Cristal (+3)', type: 'weapon', cost: 180, currency: 'PO', damage: '1d10+3', damageType: 'cortante', range: 1.5, properties: ['Versátil', 'Corte de Cristal'], weight: 2.5, magic: true },
+  martelo_runico: { id: 'martelo_runico', name: 'Martelo Rúnico de Thorin (+3)', type: 'weapon', cost: 220, currency: 'PO', damage: '2d6+3', damageType: 'concussão', range: 1.5, properties: ['Pesada', 'Atordoamento Sísmico'], weight: 3.5, magic: true },
+  pocao_cura_superior: { id: 'pocao_cura_superior', name: 'Poção de Cura Superior (6d4+6)', type: 'consumable', cost: 150, currency: 'PO', heal: '6d4+6', desc: 'Restaura rapidamente 6d4+6 Pontos de Vida.', weight: 0.2 },
+
+  // Tier 4 (Masmorra Proibida)
+  lamina_solar: { id: 'lamina_solar', name: 'Lâmina Solar Sagrada (+4)', type: 'weapon', cost: 450, currency: 'PO', damage: '2d8+4', damageType: 'radiante', range: 1.5, properties: ['Finesse', 'Dano Radiante Sagrado'], weight: 1.5, magic: true },
+  armadura_placas_completa: { id: 'armadura_placas_completa', name: 'Armadura Completa dos Reis (+15 PV, CA 20)', type: 'armor', cost: 650, currency: 'PO', ac: 20, hpBonus: 15, addDex: false, weight: 28, category: 'Pesada', magic: true },
+  cajado_arquimago: { id: 'cajado_arquimago', name: 'Cajado Celestial do Arquimago', type: 'weapon', cost: 500, currency: 'PO', damage: '2d8+3', damageType: 'fogo', range: 18, properties: ['Foco Supremo', 'Disparo de Chamas Arcanas'], weight: 2, magic: true },
+  elixir_divino: { id: 'elixir_divino', name: 'Elixir Divino da Ressurreição (8d4+10)', type: 'consumable', cost: 250, currency: 'PO', heal: '8d4+10', desc: 'Restaura totalmente as forças vitais e regenera 8d4+10 PV.', weight: 0.3 },
+
   // Itens Mágicos
   anel_protecao: { id: 'anel_protecao', name: 'Anel de Proteção (+1 CA)', type: 'magic', cost: 200, currency: 'PO', acBonus: 1, desc: 'Aumenta sua Classe de Armadura (CA) em +1.', weight: 0.1, magic: true },
   amuleto_saude: { id: 'amuleto_saude', name: 'Amuleto de Vitalidade (+10 PV)', type: 'magic', cost: 250, currency: 'PO', hpBonus: 10, desc: 'Concede +10 de Vida Máxima ao portador.', weight: 0.2, magic: true }
@@ -357,7 +383,8 @@ export const SPELLS = [
   { id: 'thunderwave', name: 'Onda Trovejante', level: 1, school: 'Evocação', range: 6, damage: '2d8', damageType: 'trovão', desc: 'Explosão sônica devastadora em curto alcance.' },
   { id: 'inflict_wounds', name: 'Infligir Ferimentos', level: 1, school: 'Necromancia', range: 3, damage: '3d10', damageType: 'necrótico', desc: 'Toque sombrio que drena a vida do alvo.' },
   { id: 'bless', name: 'Palavra Curativa Divina', level: 1, school: 'Evocação', range: 15, heal: '2d4+3', desc: 'Prece divina que restaura 2d4+3 PV à distância.' },
-  { id: 'scorching_ray', name: 'Raio Ardente', level: 2, school: 'Evocação', range: 18, damage: '4d6', damageType: 'fogo', desc: 'Dispara rajadas explosivas de fogo solar.' }
+  { id: 'scorching_ray', name: 'Raio Ardente', level: 2, school: 'Evocação', range: 18, damage: '4d6', damageType: 'fogo', desc: 'Dispara rajadas explosivas de fogo solar.' },
+  { id: 'misty_step', name: 'Passo Nebuloso', level: 2, school: 'Conjuração', range: 9, teleport: true, desc: 'Envolto em névoa prateada, você se teletransporta instantaneamente até 9 metros para um espaço desocupado.' }
 ];
 
 export const MONSTERS = [
@@ -598,10 +625,473 @@ export const MONSTERS = [
       { name: 'Mordida Aberrante', bonus: 5, damage: '2d6+2', range: 1.5, type: 'perfurante', desc: 'Mordida central (+5)' }
     ],
     features: ['Olho Antimagia', 'Levitação']
+  },
+
+  // === INIMIGOS E BOSSES POR LAND (A Lenda das Quatro Relíquias) ===
+  // Land 1: Floresta
+  {
+    id: 'forest_slime',
+    name: 'Slime da Floresta',
+    cr: '1/4',
+    xp: 50,
+    goldDrop: 12,
+    hp: 14,
+    maxHp: 14,
+    ac: 11,
+    speed: 7.5,
+    size: 'Médio',
+    color: '#22c55e',
+    avatar: '🟢',
+    stats: { str: 10, dex: 12, con: 13, int: 1, wis: 8, cha: 3 },
+    actions: [{ name: 'Gosma Ácida', bonus: 3, damage: '1d6+1', range: 1.5, type: 'ácido', desc: 'Ataque pegajoso' }]
+  },
+  {
+    id: 'forest_spider',
+    name: 'Aranha do Bosque',
+    cr: '1/2',
+    xp: 80,
+    goldDrop: 18,
+    hp: 18,
+    maxHp: 18,
+    ac: 13,
+    speed: 9,
+    size: 'Médio',
+    color: '#8b5cf6',
+    avatar: '🕷️',
+    stats: { str: 12, dex: 15, con: 12, int: 2, wis: 10, cha: 4 },
+    actions: [{ name: 'Mordida Venenosa', bonus: 4, damage: '1d6+2', range: 1.5, type: 'veneno', desc: 'Injeta toxina' }]
+  },
+  {
+    id: 'goblin_scout',
+    name: 'Goblin Batedor',
+    cr: '1/2',
+    xp: 75,
+    goldDrop: 15,
+    hp: 16,
+    maxHp: 16,
+    ac: 13,
+    speed: 9,
+    size: 'Pequeno',
+    color: '#65a30d',
+    avatar: '👺',
+    stats: { str: 10, dex: 14, con: 12, int: 10, wis: 8, cha: 8 },
+    actions: [
+      { name: 'Adaga Serrilhada', bonus: 4, damage: '1d6+2', range: 1.5, type: 'perfurante', desc: 'Golpe rápido' },
+      { name: 'Arco Curto', bonus: 4, damage: '1d6+2', range: 15, type: 'perfurante', desc: 'Disparo de flecha' }
+    ]
+  },
+  {
+    id: 'arachna_queen',
+    name: 'Arachna, a Tecedora Sombria',
+    cr: '2',
+    xp: 350,
+    goldDrop: 160,
+    hp: 55,
+    maxHp: 55,
+    ac: 14,
+    speed: 9,
+    size: 'Grande',
+    color: '#9333ea',
+    avatar: '🕷️',
+    isBoss: true,
+    stats: { str: 15, dex: 16, con: 14, int: 6, wis: 12, cha: 8 },
+    actions: [
+      { name: 'Picada Peçonhenta', bonus: 5, damage: '2d6+3', range: 1.5, type: 'veneno', desc: 'Picada massiva com peçonha (+5)' },
+      { name: 'Jato de Teia Paralisante', bonus: 4, damage: '1d8+2', range: 8, type: 'ácido', desc: 'Prende e corrói à distância (+4)' }
+    ]
+  },
+
+  // Land 2: Pântano
+  {
+    id: 'bog_slime',
+    name: 'Slime Tóxico do Pântano',
+    cr: '1',
+    xp: 120,
+    goldDrop: 25,
+    hp: 26,
+    maxHp: 26,
+    ac: 12,
+    speed: 7.5,
+    size: 'Médio',
+    color: '#10b981',
+    avatar: '🟩',
+    stats: { str: 12, dex: 10, con: 16, int: 2, wis: 8, cha: 2 },
+    actions: [{ name: 'Lodo Fétido', bonus: 4, damage: '1d8+2', range: 1.5, type: 'ácido', desc: 'Queima com ácido corrosivo' }]
+  },
+  {
+    id: 'giant_swamp_frog',
+    name: 'Sapo Carnívoro Gigante',
+    cr: '1',
+    xp: 150,
+    goldDrop: 30,
+    hp: 34,
+    maxHp: 34,
+    ac: 13,
+    speed: 9,
+    size: 'Grande',
+    color: '#15803d',
+    avatar: '🐸',
+    stats: { str: 15, dex: 13, con: 14, int: 2, wis: 10, cha: 3 },
+    actions: [
+      { name: 'Língua Chicoteante', bonus: 5, damage: '1d8+3', range: 4.5, type: 'contundente', desc: 'Puxa e atinge com impacto' },
+      { name: 'Mordida Devoradora', bonus: 5, damage: '2d6+3', range: 1.5, type: 'perfurante', desc: 'Abocanha o alvo (+5)' }
+    ]
+  },
+  {
+    id: 'swamp_troll',
+    name: 'Troll Menor do Brejo',
+    cr: '2',
+    xp: 250,
+    goldDrop: 50,
+    hp: 45,
+    maxHp: 45,
+    ac: 13,
+    speed: 9,
+    size: 'Grande',
+    color: '#065f46',
+    avatar: '🧌',
+    stats: { str: 17, dex: 10, con: 16, int: 5, wis: 9, cha: 5 },
+    actions: [
+      { name: 'Garras de Lodo', bonus: 5, damage: '2d6+3', range: 1.5, type: 'cortante', desc: 'Arranhão dilacerante' }
+    ]
+  },
+  {
+    id: 'bog_abomination',
+    name: 'Gargatroll, a Abominação do Lodo',
+    cr: '4',
+    xp: 650,
+    goldDrop: 280,
+    hp: 95,
+    maxHp: 95,
+    ac: 15,
+    speed: 9,
+    size: 'Grande',
+    color: '#047857',
+    avatar: '🧌',
+    isBoss: true,
+    stats: { str: 19, dex: 10, con: 18, int: 6, wis: 11, cha: 7 },
+    actions: [
+      { name: 'Clava de Tronco Podre', bonus: 6, damage: '2d8+4', range: 2, type: 'contundente', desc: 'Golpe sísmico de tronco (+6)' },
+      { name: 'Vômito Corrosivo de Lodo', bonus: 5, damage: '2d6+3', range: 9, type: 'ácido', desc: 'Cuspe em área que corrói armaduras (+5)' }
+    ]
+  },
+
+  // Land 3: Cavernas
+  {
+    id: 'crystal_spider',
+    name: 'Aranha de Cristal Perfurante',
+    cr: '2',
+    xp: 220,
+    goldDrop: 55,
+    hp: 42,
+    maxHp: 42,
+    ac: 15,
+    speed: 9,
+    size: 'Médio',
+    color: '#06b6d4',
+    avatar: '🕷️',
+    stats: { str: 14, dex: 17, con: 14, int: 3, wis: 12, cha: 4 },
+    actions: [
+      { name: 'Ferrão de Safira', bonus: 6, damage: '2d6+3', range: 1.5, type: 'perfurante', desc: 'Perfura carapaças (+6)' },
+      { name: 'Disparo de Agulhas Cristalinas', bonus: 5, damage: '1d10+2', range: 12, type: 'perfurante', desc: 'Estilhaços à distância' }
+    ]
+  },
+  {
+    id: 'mine_goblin',
+    name: 'Goblin Minerador Salteador',
+    cr: '1',
+    xp: 140,
+    goldDrop: 40,
+    hp: 30,
+    maxHp: 30,
+    ac: 14,
+    speed: 9,
+    size: 'Pequeno',
+    color: '#eab308',
+    avatar: '👺',
+    stats: { str: 12, dex: 15, con: 13, int: 10, wis: 8, cha: 7 },
+    actions: [
+      { name: 'Picareta Pesada', bonus: 5, damage: '1d8+2', range: 1.5, type: 'perfurante', desc: 'Golpe perfurador de rocha' },
+      { name: 'Dinamite das Minas', bonus: 4, damage: '2d6', range: 9, type: 'fogo', desc: 'Explosão de pólvora' }
+    ]
+  },
+  {
+    id: 'rock_troglodyte',
+    name: 'Troglodita Pedregoso',
+    cr: '2',
+    xp: 260,
+    goldDrop: 60,
+    hp: 52,
+    maxHp: 52,
+    ac: 15,
+    speed: 9,
+    size: 'Médio',
+    color: '#78716c',
+    avatar: '🗿',
+    stats: { str: 18, dex: 10, con: 17, int: 6, wis: 10, cha: 6 },
+    actions: [
+      { name: 'Maça de Obsidiana', bonus: 6, damage: '2d8+4', range: 1.5, type: 'contundente', desc: 'Pancada pesada de pedra' }
+    ]
+  },
+  {
+    id: 'crystal_colossus',
+    name: 'O Colosso de Cristal Ancestral',
+    cr: '6',
+    xp: 1200,
+    goldDrop: 450,
+    hp: 150,
+    maxHp: 150,
+    ac: 16,
+    speed: 7.5,
+    size: 'Grande',
+    color: '#0ea5e9',
+    avatar: '💎',
+    isBoss: true,
+    stats: { str: 21, dex: 8, con: 20, int: 4, wis: 11, cha: 6 },
+    actions: [
+      { name: 'Punho Sísmico Esmagador', bonus: 7, damage: '2d10+5', range: 2, type: 'contundente', desc: 'Golpe colossal de pedra (+7)' },
+      { name: 'Disparo de Estilhaços Prismáticos', bonus: 6, damage: '2d8+4', range: 12, type: 'perfurante', desc: 'Chuva de fragmentos afiados (+6)' }
+    ]
+  },
+
+  // Land 4: Masmorra Proibida
+  {
+    id: 'skeleton_knight',
+    name: 'Cavaleiro Esqueleto Blindado',
+    cr: '2',
+    xp: 300,
+    goldDrop: 70,
+    hp: 48,
+    maxHp: 48,
+    ac: 16,
+    speed: 9,
+    size: 'Médio',
+    color: '#94a3b8',
+    avatar: '💀',
+    stats: { str: 16, dex: 12, con: 15, int: 8, wis: 10, cha: 7 },
+    actions: [
+      { name: 'Espada Longa Maldita', bonus: 6, damage: '1d10+3', range: 1.5, type: 'cortante', desc: 'Aço enferrujado mortal' },
+      { name: 'Investida com Escudo', bonus: 5, damage: '1d6+3', range: 1.5, type: 'contundente', desc: 'Derruba o inimigo' }
+    ]
+  },
+  {
+    id: 'fire_imp',
+    name: 'Diabrete Vulcânico',
+    cr: '2',
+    xp: 280,
+    goldDrop: 65,
+    hp: 38,
+    maxHp: 38,
+    ac: 14,
+    speed: 10.5,
+    size: 'Pequeno',
+    color: '#f97316',
+    avatar: '👿',
+    stats: { str: 8, dex: 17, con: 13, int: 11, wis: 10, cha: 12 },
+    actions: [
+      { name: 'Lança-Chamas Menor', bonus: 5, damage: '2d6+3', range: 12, type: 'fogo', desc: 'Disparo ígneo' },
+      { name: 'Garras Incandescentes', bonus: 5, damage: '1d6+3', range: 1.5, type: 'fogo', desc: 'Arranhão queimante' }
+    ]
+  },
+  {
+    id: 'abyssal_demon',
+    name: 'Demônio Chifrudo Abissal',
+    cr: '4',
+    xp: 750,
+    goldDrop: 140,
+    hp: 85,
+    maxHp: 85,
+    ac: 15,
+    speed: 9,
+    size: 'Grande',
+    color: '#dc2626',
+    avatar: '👹',
+    stats: { str: 19, dex: 13, con: 18, int: 11, wis: 12, cha: 13 },
+    actions: [
+      { name: 'Machado Abissal', bonus: 7, damage: '2d8+4', range: 2, type: 'cortante', desc: 'Golpe devastador (+7)' },
+      { name: 'Fogo do Inferno', bonus: 6, damage: '2d8+3', range: 9, type: 'fogo', desc: 'Chamas do tártaro (+6)' }
+    ]
+  },
+  {
+    id: 'malakor_tyrant',
+    name: 'Malakor, o Lorde Tirano das Trevas',
+    cr: '10',
+    xp: 2500,
+    goldDrop: 1000,
+    hp: 220,
+    maxHp: 220,
+    ac: 17,
+    speed: 9,
+    size: 'Grande',
+    color: '#b91c1c',
+    avatar: '👿',
+    isBoss: true,
+    stats: { str: 18, dex: 14, con: 20, int: 20, wis: 16, cha: 18 },
+    actions: [
+      { name: 'Ceifadora de Almas Vorpal', bonus: 8, damage: '3d8+5', range: 2, type: 'necrótico', desc: 'Espada do vazio que drena a vida (+8)' },
+      { name: 'Chuva de Cometas Abissais', bonus: 7, damage: '3d6+4', range: 15, type: 'fogo', desc: 'Chuva de fogo e sombras no campo (+7)' }
+    ]
   }
 ];
 
 export const MAP_PRESETS = [
+  // === AS QUATRO LANDS EXTENSAS (MAPAS PRÓPRIOS MMORPG) ===
+  {
+    id: 'land_forest',
+    name: 'Land 1: A Floresta das Raízes Antigas',
+    theme: 'forest',
+    cols: 46,
+    rows: 32,
+    gridSize: 52,
+    bgColor: '#0c1a10',
+    floorColor: '#142918',
+    gridColor: 'rgba(160, 255, 160, 0.06)',
+    torches: [
+      { x: 34, y: 8 }, // Fogueira do acampamento (Nordeste)
+      { x: 10, y: 25 }, // Ponte do rio (Sudoeste)
+      { x: 42, y: 23 }  // Entrada da Caverna do Boss (Sudeste)
+    ],
+    obstacles: [
+      // Acampamento Seguro de Sobreviventes (Nordeste)
+      { x: 30, y: 3, w: 3, h: 2, type: 'tent', label: 'Tenda dos Exploradores' },
+      { x: 34, y: 2, w: 3, h: 2, type: 'tent', label: 'Tenda do Ancião' },
+      { x: 37, y: 4, w: 3, h: 2, type: 'tent', label: 'Tenda de Suprimentos' },
+      { x: 37, y: 9, w: 3, h: 2, type: 'tent', label: 'Tenda da Guarda' },
+      { x: 28, y: 6, w: 2, h: 2, type: 'table', label: 'Bancada da Ferreira Kaelen' },
+      { x: 34, y: 8, w: 1, h: 1, type: 'campfire', label: 'Fogueira do Acampamento' },
+
+      // Rio Sussurrante no Sudoeste com Ponte de Madeira transitável em (8..12, 23..26)
+      { x: 0, y: 19, w: 8, h: 5, type: 'water', label: 'Rio Sussurrante' },
+      { x: 12, y: 27, w: 7, h: 5, type: 'water', label: 'Rio Sussurrante' },
+
+      // Bosques Densos e Pinheiros da Região
+      { x: 1, y: 1, w: 7, h: 5, type: 'tree', label: 'Bosque Noroeste' },
+      { x: 9, y: 11, w: 6, h: 5, type: 'tree', label: 'Bosque Central' },
+      { x: 17, y: 1, w: 6, h: 4, type: 'tree', label: 'Bosque Norte' },
+      { x: 26, y: 15, w: 5, h: 5, type: 'tree', label: 'Pinheiros Antigos' },
+      { x: 20, y: 23, w: 6, h: 5, type: 'tree', label: 'Mata Sul' },
+      { x: 41, y: 2, w: 4, h: 11, type: 'tree', label: 'Mata Leste' },
+
+      // Paredão Rochoso da Caverna Sudeste (Covil de Arachna)
+      { x: 34, y: 23, w: 4, h: 5, type: 'wall', label: 'Paredão Rochoso' },
+      { x: 44, y: 20, w: 2, h: 6, type: 'wall', label: 'Escarpa da Caverna' }
+    ]
+  },
+
+  {
+    id: 'land_swamp',
+    name: 'Land 2: O Pântano da Bruxa dos Espelhos',
+    theme: 'swamp',
+    cols: 48,
+    rows: 34,
+    gridSize: 52,
+    bgColor: '#0f1712',
+    floorColor: '#17241c',
+    gridColor: 'rgba(52, 211, 153, 0.06)',
+    torches: [
+      { x: 7, y: 4 }, { x: 24, y: 11 }, { x: 35, y: 22 }, { x: 36, y: 8 }
+    ],
+    obstacles: [
+      // Cabana de Baba Morwenna nas Palafitas (Nordeste)
+      { x: 35, y: 2, w: 7, h: 6, type: 'wall', label: 'Cabana de Baba Morwenna' },
+      { x: 33, y: 8, w: 2, h: 1, type: 'fence', label: 'Cerca do Pântano' },
+
+      // Lagoas e Canais de Lodo (Pontes livres em x:26..31, y:11..13 e x:26..31, y:23..25)
+      { x: 16, y: 0, w: 14, h: 9, type: 'water', label: 'Lagoa Norte de Lodo' },
+      { x: 0, y: 13, w: 8, h: 6, type: 'water', label: 'Brejo Oeste' },
+      { x: 31, y: 15, w: 12, h: 7, type: 'water', label: 'Canal Pantanoso Leste' },
+      { x: 16, y: 26, w: 12, h: 8, type: 'water', label: 'Lagoa Sul das Rãs' },
+
+      // Salgueiros Mortos Gigantes com Musgo e Acampamento do Patrulheiro
+      { x: 13, y: 2, w: 3, h: 6, type: 'tree', label: 'Salgueiro Podre' },
+      { x: 9, y: 13, w: 3, h: 5, type: 'tree', label: 'Árvore Oca do Pântano' },
+      { x: 20, y: 8, w: 3, h: 4, type: 'tree', label: 'Tronco Retorcido' },
+      { x: 43, y: 14, w: 4, h: 6, type: 'tree', label: 'Manguezal Sombrio' },
+      { x: 2, y: 27, w: 5, h: 5, type: 'tree', label: 'Bosque Enlameado Sudoeste' },
+      { x: 21, y: 15, w: 2, h: 2, type: 'tent', label: 'Abrigo do Patrulheiro' },
+      { x: 19, y: 16, w: 1, h: 1, type: 'campfire', label: 'Fogueira da Ilha Central' },
+      { x: 42, y: 9, w: 2, h: 2, type: 'table', label: 'Caldeirão de Alquimia da Bruxa' },
+      { x: 44, y: 24, w: 3, h: 3, type: 'wall', label: 'Monólito de Pedra do Brejo' }
+    ]
+  },
+
+  {
+    id: 'land_cave',
+    name: 'Land 3: As Minas e Cavernas de Cristal',
+    theme: 'cave',
+    cols: 50,
+    rows: 36,
+    gridSize: 52,
+    bgColor: '#120f18',
+    floorColor: '#1c1726',
+    gridColor: 'rgba(168, 85, 247, 0.06)',
+    torches: [
+      { x: 12, y: 10 }, { x: 25, y: 11 }, { x: 32, y: 4 }, { x: 46, y: 5 },
+      { x: 13, y: 25 }, { x: 20, y: 27 }, { x: 46, y: 23 }
+    ],
+    obstacles: [
+      // Acampamento dos Mineiros (Nordeste)
+      { x: 30, y: 7, w: 3, h: 2, type: 'tent', label: 'Tenda dos Mineiros' },
+      { x: 35, y: 8, w: 3, h: 2, type: 'tent', label: 'Tenda de Thorin' },
+      { x: 33, y: 10, w: 1, h: 1, type: 'campfire', label: 'Caldeirão dos Mineiros' },
+
+      // Lago Subterrâneo (Sudeste)
+      { x: 26, y: 25, w: 15, h: 8, type: 'water', label: 'Lago Subterrâneo' },
+
+      // Formações de Cristais de Safira & Ametista e Paredões de Rocha
+      { x: 17, y: 4, w: 8, h: 4, type: 'wall', label: 'Abismo Rochoso' },
+      { x: 12, y: 16, w: 6, h: 5, type: 'wall', label: 'Paredão de Basalto' },
+      { x: 3, y: 11, w: 2, h: 2, type: 'pillar', label: 'Cristal de Safira' },
+      { x: 4, y: 22, w: 2, h: 2, type: 'pillar', label: 'Drusa de Ametista' },
+      { x: 30, y: 18, w: 6, h: 4, type: 'pillar', label: 'Geoda Cristalina' },
+      { x: 38, y: 6, w: 2, h: 2, type: 'table', label: 'Bigorna de Cristal de Thorin' },
+      { x: 9, y: 3, w: 2, h: 2, type: 'pillar', label: 'Pilar de Quartzo Azul' },
+      { x: 20, y: 28, w: 2, h: 2, type: 'pillar', label: 'Cristal Prismático Sul' },
+      { x: 46, y: 11, w: 2, h: 2, type: 'pillar', label: 'Jazida de Safira Leste' }
+    ]
+  },
+
+  {
+    id: 'land_dungeon',
+    name: 'Land 4: A Masmorra Proibida & Cripta Infernal',
+    theme: 'dungeon',
+    cols: 52,
+    rows: 38,
+    gridSize: 52,
+    bgColor: '#16131c',
+    floorColor: '#201b2a',
+    gridColor: 'rgba(239, 68, 68, 0.06)',
+    torches: [
+      { x: 11, y: 11 }, { x: 21, y: 14 }, { x: 30, y: 14 },
+      { x: 6, y: 21 }, { x: 14, y: 21 }, { x: 37, y: 22 }, { x: 44, y: 31 }
+    ],
+    obstacles: [
+      // Refúgio dos Cruzados Barricados (Noroeste)
+      { x: 6, y: 5, w: 3, h: 3, type: 'tent', label: 'Tenda Roxa dos Cruzados' },
+      { x: 12, y: 5, w: 3, h: 3, type: 'tent', label: 'Tenda Verde de Solaria' },
+      { x: 11, y: 11, w: 1, h: 1, type: 'campfire', label: 'Fogueira Consagrada' },
+      { x: 5, y: 16, w: 11, h: 1, type: 'fence', label: 'Paliçada de Madeira' },
+      { x: 6, y: 10, w: 2, h: 2, type: 'table', label: 'Mesa Tática de Valerius' },
+
+      // Sarcófagos da Cripta Norte
+      { x: 21, y: 2, w: 3, h: 4, type: 'pillar', label: 'Sarcófago Real' },
+      { x: 28, y: 2, w: 3, h: 4, type: 'pillar', label: 'Sarcófago Imperial' },
+      { x: 34, y: 2, w: 3, h: 4, type: 'pillar', label: 'Sarcófago dos Antigos' },
+
+      // Grades da Prisão Sudoeste
+      { x: 12, y: 22, w: 8, h: 2, type: 'wall', label: 'Grades da Prisão' },
+      { x: 2, y: 22, w: 5, h: 2, type: 'wall', label: 'Celas de Tortura' },
+
+      // Paredes Divisórias dos Corredores
+      { x: 20, y: 10, w: 12, h: 2, type: 'wall', label: 'Muralha Interna' },
+      { x: 26, y: 19, w: 6, h: 2, type: 'wall', label: 'Muralha Central' },
+
+      // Altar Rúnico do Trono de Malakor (Sudeste)
+      { x: 35, y: 33, w: 3, h: 2, type: 'altar', label: 'Altar Rúnico de Malakor' }
+    ]
+  },
+
+  // Mapas Clássicos Anteriores (Compatibilidade)
   {
     id: 'dungeon_crypt',
     name: 'Cripta do Rei Esqueleto',
@@ -694,87 +1184,16 @@ export const MAP_PRESETS = [
   }
 ];
 
-// Missões e Encontros para o Mestre Automático
-export const ADVENTURES = [
-  {
-    id: 'crypt_patrol',
-    name: 'Ato 1: A Cripta dos Ossos Inquietos',
-    difficulty: 'Fácil (Nível 1)',
-    mapId: 'dungeon_crypt',
-    narration: '📜 MESTRE AUTOMÁTICO: As portas de ferro da cripta se abrem com um rangido. Tochas bruxuleiam nas paredes úmidas enquanto Goblins saqueadores e Esqueletos erguem suas armas contra vocês!',
-    enemies: [
-      { monsterId: 'goblin', x: 12, y: 5, name: 'Goblin Batedor' },
-      { monsterId: 'goblin', x: 12, y: 9, name: 'Goblin Arqueiro' },
-      { monsterId: 'skeleton', x: 16, y: 7, name: 'Esqueleto Guardião' }
-    ],
-    chests: [
-      { id: 'chest_1', x: 17, y: 7, gold: 45, itemId: 'pocao_cura', opened: false }
-    ]
-  },
-  {
-    id: 'forest_ambush',
-    name: 'Ato 2: Emboscada na Floresta Sussurrante',
-    difficulty: 'Médio (Nível 1-2)',
-    mapId: 'goblin_ambush',
-    narration: '📜 MESTRE AUTOMÁTICO: Galhos se partem na mata fechada! Uma matilha liderada por Orcs e Lobos Atrozes cerca a estrada para saquear os viajantes!',
-    enemies: [
-      { monsterId: 'goblin', x: 11, y: 4, name: 'Goblin Emboscador' },
-      { monsterId: 'orc', x: 14, y: 7, name: 'Orc Chefe de Guerra' },
-      { monsterId: 'dire_wolf', x: 13, y: 10, name: 'Lobo Atroz Faminto' }
-    ],
-    chests: [
-      { id: 'chest_2', x: 9, y: 5, gold: 70, itemId: 'espada_longa', opened: false },
-      { id: 'chest_3', x: 18, y: 4, gold: 50, itemId: 'pocao_cura_maior', opened: false }
-    ]
-  },
-  {
-    id: 'tavern_brawl',
-    name: 'Ato 3: Invasão na Taverna do Javali',
-    difficulty: 'Médio (Nível 2)',
-    mapId: 'tavern_boar',
-    narration: '📜 MESTRE AUTOMÁTICO: A porta da taverna é arrombada! Mercenários armados e um Ogro Brutamontes entram exigindo todo o ouro da casa!',
-    enemies: [
-      { monsterId: 'bandit', x: 12, y: 4, name: 'Bandido Besteiro' },
-      { monsterId: 'bandit', x: 12, y: 10, name: 'Bandido Espadachim' },
-      { monsterId: 'ogre', x: 15, y: 7, name: 'Ogro Quebra-Ossos' }
-    ],
-    chests: [
-      { id: 'chest_4', x: 16, y: 3, gold: 110, itemId: 'anel_protecao', opened: false }
-    ]
-  },
-  {
-    id: 'necromancer_sanctum',
-    name: 'Ato 4: O Ritual do Necromante',
-    difficulty: 'Difícil (Nível 2-3)',
-    mapId: 'dungeon_crypt',
-    narration: '📜 MESTRE AUTOMÁTICO: Energia necrótica roxa pulsa do altar! O Necromante Sombrio comanda seus mortos-vivos para proteger a relíquia ancestral!',
-    enemies: [
-      { monsterId: 'zombie', x: 11, y: 5, name: 'Zumbi Putrefato' },
-      { monsterId: 'skeleton', x: 11, y: 9, name: 'Esqueleto Arqueiro' },
-      { monsterId: 'giant_spider', x: 14, y: 4, name: 'Aranha das Catacumbas' },
-      { monsterId: 'necromancer', x: 17, y: 7, name: 'Malakor, o Necromante' }
-    ],
-    chests: [
-      { id: 'chest_5', x: 19, y: 7, gold: 200, itemId: 'espada_flamejante', opened: false }
-    ]
-  },
-  {
-    id: 'dragon_boss',
-    name: 'Ato Final: A Fúria do Dragão Vermelho',
-    difficulty: 'Chefão Lendário (Nível 3+)',
-    mapId: 'dragon_lair',
-    narration: '📜 MESTRE AUTOMÁTICO: O chão treme e os rios de lava borbulham! Ignis, o Dragão Vermelho, abre suas asas colossais sobre a montanha de ouro e ruge!',
-    enemies: [
-      { monsterId: 'kobold', x: 12, y: 5, name: 'Kobold Servo do Dragão' },
-      { monsterId: 'kobold', x: 12, y: 10, name: 'Kobold Fanático' },
-      { monsterId: 'young_red_dragon', x: 16, y: 7, name: 'Ignis, o Dragão Vermelho' }
-    ],
-    chests: [
-      { id: 'chest_6', x: 20, y: 6, gold: 500, itemId: 'armadura_placas', opened: false },
-      { id: 'chest_7', x: 20, y: 9, gold: 300, itemId: 'amuleto_saude', opened: false }
-    ]
-  }
-];
+// Missões e Lands da Campanha Principal (A Lenda das Quatro Relíquias de Eldoria)
+export const ADVENTURES = STORY_CAMPAIGN.lands.map(land => ({
+  id: land.id,
+  name: `Land ${land.number}: ${land.name}`,
+  difficulty: `Tier ${land.number} • Boss: ${land.bossName}`,
+  mapId: land.id,
+  narration: `📜 A LENDA DE ELDORIA: ${land.description}`,
+  enemies: land.enemies,
+  chests: land.chests
+}));
 
 export const CONDITIONS = [
   { id: 'blinded', name: 'Cego', icon: '👁️‍🗨️', desc: 'Desvantagem em ataques.' },
@@ -797,6 +1216,19 @@ export function formatMod(mod) {
 }
 
 export function calculateCharacterDerivedStats(char) {
+  if (!char) {
+    return {
+      profBonus: 2,
+      ac: 10,
+      initiative: 0,
+      passivePerception: 10,
+      carryCapacity: 75,
+      meleeAtkBonus: 2,
+      rangedAtkBonus: 2,
+      spellSaveDC: 10,
+      spellAtkBonus: 2
+    };
+  }
   const stats = char.stats || { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 };
   const level = char.level || 1;
   const profBonus = Math.floor((level - 1) / 4) + 2;
@@ -810,14 +1242,15 @@ export function calculateCharacterDerivedStats(char) {
 
   // Calculate AC from inventory
   let ac = 10 + dexMod;
-  const inv = char.inventory || [];
-  const armor = inv.find(i => i.type === 'armor');
+  const rawInv = Array.isArray(char.inventory) ? char.inventory : [];
+  const inv = rawInv.map(i => typeof i === 'string' ? ITEMS[i] : i).filter(Boolean);
+  const armor = inv.find(i => i && i.type === 'armor');
   if (armor) {
     if (armor.addDex) {
       const dexBonus = armor.maxDex !== undefined ? Math.min(dexMod, armor.maxDex) : dexMod;
-      ac = armor.ac + dexBonus;
+      ac = (armor.ac || 10) + dexBonus;
     } else {
-      ac = armor.ac;
+      ac = armor.ac || 10;
     }
   } else if (char.classId === 'barbarian') {
     ac = 10 + dexMod + conMod;
@@ -825,7 +1258,7 @@ export function calculateCharacterDerivedStats(char) {
 
   // Shield & Magic AC bonuses
   inv.forEach(item => {
-    if (item.acBonus) ac += item.acBonus;
+    if (item && item.acBonus) ac += item.acBonus;
   });
 
   // Spellcasting ability mod

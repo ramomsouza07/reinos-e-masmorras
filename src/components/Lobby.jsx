@@ -9,9 +9,13 @@ import {
   Check,
   ChevronRight,
   Trash2,
-  Bot
+  Bot,
+  AlertCircle,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import CharacterCreator from './CharacterCreator';
+import Character2DPreview from './Character2DSprite';
 import { ITEMS, calculateCharacterDerivedStats } from '../data/dndData';
 import { sounds } from '../utils/soundEffects';
 
@@ -119,10 +123,12 @@ const PRESET_HEROES = [
   }
 ];
 
-export default function Lobby({ onJoin }) {
+export default function Lobby({ onJoin, isConnected = true, socketError = null }) {
   const [role, setRole] = useState('player'); // 'player' | 'dm'
   const [roomId, setRoomId] = useState('MASMORRA-1');
   const [dmPass, setDmPass] = useState('mestre123');
+  const [isJoining, setIsJoining] = useState(false);
+  const [localFeedback, setLocalFeedback] = useState(null);
 
   const [savedCharacters, setSavedCharacters] = useState([]);
   const [selectedCharacter, setSelectedCharacter] = useState(null);
@@ -182,6 +188,13 @@ export default function Lobby({ onJoin }) {
     e.preventDefault();
     if (!roomId.trim()) return;
 
+    if (!isConnected) {
+      setLocalFeedback('O servidor de jogo na porta 3001 está offline. Inicie-o com "node server/index.js" antes de entrar!');
+      return;
+    }
+
+    setLocalFeedback(null);
+    setIsJoining(true);
     sounds.init();
     sounds.playDiceRoll();
 
@@ -194,6 +207,11 @@ export default function Lobby({ onJoin }) {
       dmPass,
       character: role === 'player' ? charToUse : null
     });
+
+    // Timeout safety in case server response is delayed
+    setTimeout(() => {
+      setIsJoining(false);
+    }, 4500);
   };
 
   return (
@@ -201,18 +219,65 @@ export default function Lobby({ onJoin }) {
       <div className="w-full max-w-xl bg-dnd-panel border border-dnd-border rounded-3xl p-6 sm:p-8 shadow-2xl relative z-10 animate-fadeIn">
         
         {/* Title & Brand */}
-        <div className="text-center mb-5">
+        <div className="text-center mb-4">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-dnd-darker border-2 border-dnd-gold shadow-lg text-dnd-gold mb-2">
             <Shield className="w-7 h-7 drop-shadow" />
           </div>
           <h1 className="font-cinzel font-black text-2xl sm:text-3xl text-dnd-gold tracking-wider">
             REINOS & MASMORRAS
           </h1>
-          <div className="inline-flex items-center space-x-1.5 bg-emerald-950/60 border border-emerald-600/60 text-emerald-300 text-[11px] font-bold px-3 py-0.5 rounded-full mt-1.5">
-            <Bot className="w-3.5 h-3.5" />
-            <span>Com Mestre Automático (IA) & Modo Cooperativo Online</span>
+          <div className="flex flex-wrap items-center justify-center gap-1.5 mt-2">
+            <div className="inline-flex items-center space-x-1.5 bg-emerald-950/60 border border-emerald-600/60 text-emerald-300 text-[11px] font-bold px-3 py-0.5 rounded-full">
+              <Bot className="w-3.5 h-3.5" />
+              <span>Mestre Automático (IA)</span>
+            </div>
+            <div className="inline-flex items-center space-x-1.5 bg-amber-950/80 border border-amber-500/70 text-amber-300 text-[11px] font-black px-3 py-0.5 rounded-full shadow-sm">
+              <span>🗡️ Modo Tibia 2D (WASD + Hotkeys)</span>
+            </div>
           </div>
         </div>
+
+        {/* Server Connection Status Pill */}
+        <div className="flex items-center justify-center mb-4">
+          {isConnected ? (
+            <div className="inline-flex items-center space-x-1.5 bg-emerald-950/70 border border-emerald-500/60 text-emerald-300 text-xs px-3 py-1 rounded-full font-bold">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Servidor Conectado (Porta 3001)</span>
+            </div>
+          ) : (
+            <div className="inline-flex items-center space-x-1.5 bg-red-950/80 border border-red-500/80 text-red-300 text-xs px-3.5 py-1.5 rounded-full font-bold animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-red-500" />
+              <span>Servidor Desconectado (Porta 3001)</span>
+            </div>
+          )}
+        </div>
+
+        {/* Offline Warning Banner */}
+        {!isConnected && (
+          <div className="mb-4 bg-red-950/90 border-2 border-red-600 text-red-100 p-4 rounded-2xl text-xs space-y-2 shadow-lg">
+            <div className="font-bold text-red-200 flex items-center gap-1.5 text-sm">
+              <AlertCircle className="w-4 h-4 text-red-400" />
+              <span>Servidor de Jogo Offline</span>
+            </div>
+            <p className="text-red-200 leading-relaxed text-[11px]">
+              O frontend não conseguiu se comunicar com o servidor WebSocket na porta 3001. Para iniciar ou entrar em qualquer sala, abra um terminal e execute:
+            </p>
+            <div className="bg-black/80 font-mono text-xs p-2.5 rounded-xl text-amber-300 border border-red-800/80 select-all">
+              node server/index.js
+            </div>
+            <p className="text-[10px] text-gray-400">
+              Ou se preferir: <span className="font-mono text-gray-300">npm run server</span>. Assim que iniciado, esta tela conectará automaticamente!
+            </p>
+          </div>
+        )}
+
+        {/* Server or Local Error Alert Banner */}
+        {(socketError || localFeedback) && (
+          <div className="mb-4 bg-red-900/90 border border-red-500 text-white p-3 rounded-xl text-xs font-bold flex items-center space-x-2 animate-bounce">
+            <AlertCircle className="w-4 h-4 text-red-300 shrink-0" />
+            <span>{socketError || localFeedback}</span>
+          </div>
+        )}
 
         <form onSubmit={handleEnterGame} className="space-y-4">
           {/* Role Selector */}
@@ -264,6 +329,26 @@ export default function Lobby({ onJoin }) {
             />
           </div>
 
+          {/* DM Password if role === 'dm' */}
+          {role === 'dm' && (
+            <div>
+              <label className="block text-xs font-bold text-red-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                <Crown className="w-3.5 h-3.5" />
+                <span>Senha do Mestre (Necessária para narrador humano)</span>
+              </label>
+              <input
+                type="password"
+                value={dmPass}
+                onChange={e => setDmPass(e.target.value)}
+                placeholder="Ex: mestre123"
+                className="w-full bg-dnd-darker border border-red-800 rounded-xl px-4 py-2.5 text-sm font-mono text-red-200 focus:outline-none focus:border-red-500"
+              />
+              <p className="text-[10px] text-gray-400 mt-1">
+                Ao criar a sala, esta senha será gravada. Padrão inicial: <span className="font-mono text-amber-300">mestre123</span>.
+              </p>
+            </div>
+          )}
+
           {/* Character Selection */}
           {role === 'player' && (
             <div>
@@ -295,7 +380,13 @@ export default function Lobby({ onJoin }) {
                       }`}
                     >
                       <div className="flex items-center space-x-3">
-                        <span className="text-2xl">{char.avatar || '⚔️'}</span>
+                        {char.appearance ? (
+                          <div className="w-10 h-10 rounded-xl bg-dnd-panel border border-dnd-gold/60 flex items-center justify-center overflow-hidden flex-shrink-0 shadow">
+                            <Character2DPreview appearance={char.appearance} size={40} />
+                          </div>
+                        ) : (
+                          <span className="text-2xl">{char.avatar || '⚔️'}</span>
+                        )}
                         <div>
                           <div className="font-cinzel font-bold text-sm text-gray-100">{char.name}</div>
                           <div className="text-xs text-gray-400">
@@ -327,9 +418,16 @@ export default function Lobby({ onJoin }) {
           {/* Enter Button */}
           <button
             type="submit"
-            className="w-full bg-dnd-gold hover:bg-amber-400 text-black font-cinzel font-black text-base py-3.5 rounded-xl transition shadow-xl flex items-center justify-center space-x-2 group hover:scale-[1.01]"
+            disabled={isJoining}
+            className={`w-full py-3.5 rounded-xl transition shadow-xl flex items-center justify-center space-x-2 font-cinzel font-black text-base group ${
+              !isConnected
+                ? 'bg-gray-800 border border-red-700/80 text-gray-400 hover:border-red-500'
+                : isJoining
+                ? 'bg-amber-600 text-black animate-pulse cursor-wait'
+                : 'bg-dnd-gold hover:bg-amber-400 text-black hover:scale-[1.01]'
+            }`}
           >
-            <span>ENTRAR NA AVENTURA</span>
+            <span>{isJoining ? 'ENTRANDO NA AVENTURA...' : 'ENTRAR NA AVENTURA'}</span>
             <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
           </button>
         </form>

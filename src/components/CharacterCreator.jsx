@@ -19,6 +19,15 @@ import {
   calculateCharacterDerivedStats
 } from '../data/dndData';
 import { roll4d6DropLowest } from '../utils/dice';
+import Character2DPreview, {
+  SKIN_TONES,
+  HAIR_STYLES,
+  HAIR_COLORS,
+  OUTFIT_TYPES,
+  OUTFIT_COLORS,
+  HEADWEAR_TYPES,
+  WEAPON_TYPES
+} from './Character2DSprite';
 import { sounds } from '../utils/soundEffects';
 
 const AVATARS = ['⚔️', '🧙‍♂️', '🧝‍♀️', '🧔‍♂️', '🏹', '🛡️', '🦹', '👸', '🤴', '🧚', '🧛', '🧙‍♀️', '⚡', '🐉', '🐺', '🦊'];
@@ -39,6 +48,19 @@ export default function CharacterCreator({ onComplete, onCancel }) {
   const [color, setColor] = useState(COLORS[0]);
   const [alignment, setAlignment] = useState(ALIGNMENTS[0]);
   const [backstory, setBackstory] = useState('');
+
+  // 2D Character Appearance Customizer State
+  const [appearance, setAppearance] = useState({
+    skinTone: SKIN_TONES[1].color,
+    hairStyle: 'short',
+    hairColor: HAIR_COLORS[1].color,
+    outfitType: 'adventurer',
+    outfitColor: OUTFIT_COLORS[0].color,
+    outfitSecondaryColor: OUTFIT_COLORS[0].secondary,
+    headwear: 'none',
+    weapon: 'sword',
+    hasShield: true
+  });
 
   // Attribute System Mode: 'pointbuy' | 'standard' | 'roll'
   const [statMode, setStatMode] = useState('pointbuy');
@@ -130,6 +152,7 @@ export default function CharacterCreator({ onComplete, onCancel }) {
       level: 1,
       xp: 0,
       unspentStatPoints: 0,
+      appearance,
       avatar,
       color,
       alignment,
@@ -169,7 +192,7 @@ export default function CharacterCreator({ onComplete, onCancel }) {
                 step === 1 ? 'Escolha de Raça e Bônus Raciais' :
                 step === 2 ? 'Escolha de Classe e Equipamento Inicial' :
                 step === 3 ? 'Sistema de Atributos (Compra de Pontos / Rolagem 4d6)' :
-                'Nome, Avatar e Identidade'
+                'Estilização 2D de Roupas & Identidade'
               }</p>
             </div>
           </div>
@@ -441,74 +464,241 @@ export default function CharacterCreator({ onComplete, onCancel }) {
             </div>
           )}
 
-          {/* STEP 4: IDENTITY */}
+          {/* STEP 4: 2D CHARACTER & CUSTOMIZATION */}
           {step === 4 && (
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1.5">
-                  Nome do Seu Herói
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  placeholder="Ex: Bruenor, Valeros, Lyra, Kaelen..."
-                  className="w-full bg-dnd-darker border border-dnd-border rounded-lg px-4 py-2.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-dnd-gold"
-                />
+            <div className="space-y-5">
+              {/* Top Banner: Character Preview & Identity */}
+              <div className="bg-dnd-darker border border-dnd-gold/40 rounded-2xl p-4 flex flex-col sm:flex-row items-center gap-5">
+                <div className="flex flex-col items-center justify-center p-3 bg-dnd-panel border border-dnd-border rounded-2xl shadow-inner min-w-[130px]">
+                  <Character2DPreview appearance={appearance} size={100} />
+                  <span className="text-[10px] font-bold text-dnd-gold uppercase tracking-wider mt-1">
+                    Visual 2D do Herói
+                  </span>
+                </div>
+
+                <div className="flex-1 space-y-3 w-full">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1">
+                      Nome do Seu Herói
+                    </label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                      placeholder={`Ex: ${selectedClass.name} ${selectedRace.name}`}
+                      className="w-full bg-dnd-panel border border-dnd-border rounded-xl px-4 py-2.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-dnd-gold"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1">
+                        Alinhamento Moral
+                      </label>
+                      <select
+                        value={alignment}
+                        onChange={e => setAlignment(e.target.value)}
+                        className="w-full bg-dnd-panel border border-dnd-border rounded-xl px-3 py-2 text-xs text-gray-100 focus:outline-none focus:border-dnd-gold"
+                      >
+                        {ALIGNMENTS.map(al => (
+                          <option key={al} value={al}>{al}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1">
+                        Cor da Borda no Mapa
+                      </label>
+                      <div className="flex items-center space-x-2 pt-1">
+                        {COLORS.map(c => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => setColor(c)}
+                            className={`w-6 h-6 rounded-full border-2 transition ${
+                              color === c ? 'border-white scale-125 shadow-lg' : 'border-transparent'
+                            }`}
+                            style={{ backgroundColor: c }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1.5">
-                  Ícone do Token no Mapa
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  {AVATARS.map(av => (
+              {/* Personalização 2D de Roupas & Estilo */}
+              <div className="bg-dnd-darker border border-dnd-border rounded-2xl p-4 space-y-4">
+                <div className="flex items-center space-x-2 border-b border-dnd-border/60 pb-2">
+                  <span className="text-sm font-cinzel font-bold text-dnd-gold">
+                    🎨 Estilização 2D de Roupas & Aparência
+                  </span>
+                </div>
+
+                {/* 1. Tom de Pele */}
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    1. Tom de Pele
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {SKIN_TONES.map(st => (
+                      <button
+                        key={st.id}
+                        type="button"
+                        onClick={() => setAppearance(prev => ({ ...prev, skinTone: st.color }))}
+                        className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs transition ${
+                          appearance.skinTone === st.color
+                            ? 'bg-dnd-gold/20 border-dnd-gold text-white font-bold'
+                            : 'bg-dnd-panel border-dnd-border text-gray-300 hover:border-gray-500'
+                        }`}
+                      >
+                        <span className="w-3.5 h-3.5 rounded-full border border-black/30" style={{ backgroundColor: st.color }} />
+                        <span>{st.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 2. Cabelo & Penteado */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                      2. Estilo de Cabelo
+                    </label>
+                    <select
+                      value={appearance.hairStyle}
+                      onChange={e => setAppearance(prev => ({ ...prev, hairStyle: e.target.value }))}
+                      className="w-full bg-dnd-panel border border-dnd-border rounded-xl px-3 py-2 text-xs text-gray-100 focus:outline-none focus:border-dnd-gold"
+                    >
+                      {HAIR_STYLES.map(h => (
+                        <option key={h.id} value={h.id}>{h.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                      Cor do Cabelo
+                    </label>
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      {HAIR_COLORS.map(hc => (
+                        <button
+                          key={hc.id}
+                          type="button"
+                          onClick={() => setAppearance(prev => ({ ...prev, hairColor: hc.color }))}
+                          title={hc.name}
+                          className={`w-6 h-6 rounded-full border-2 transition ${
+                            appearance.hairColor === hc.color ? 'border-white scale-125 shadow-md' : 'border-transparent'
+                          }`}
+                          style={{ backgroundColor: hc.color }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Traje / Roupas / Armadura */}
+                <div className="space-y-2">
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider">
+                    3. Tipo de Roupa / Armadura
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {OUTFIT_TYPES.map(outfit => (
+                      <button
+                        key={outfit.id}
+                        type="button"
+                        onClick={() => setAppearance(prev => ({ ...prev, outfitType: outfit.id }))}
+                        className={`text-left p-2.5 rounded-xl border transition ${
+                          appearance.outfitType === outfit.id
+                            ? 'bg-dnd-gold/20 border-dnd-gold text-dnd-gold font-bold shadow'
+                            : 'bg-dnd-panel border-dnd-border text-gray-300 hover:border-gray-500'
+                        }`}
+                      >
+                        <div className="text-xs truncate">{outfit.name}</div>
+                        <div className="text-[10px] text-gray-400 line-clamp-1">{outfit.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 mt-2">
+                      Cor da Roupa
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {OUTFIT_COLORS.map(oc => (
+                        <button
+                          key={oc.id}
+                          type="button"
+                          onClick={() => setAppearance(prev => ({
+                            ...prev,
+                            outfitColor: oc.color,
+                            outfitSecondaryColor: oc.secondary
+                          }))}
+                          className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-xl border text-xs transition ${
+                            appearance.outfitColor === oc.color
+                              ? 'bg-white/10 border-white text-white font-bold'
+                              : 'bg-dnd-panel border-dnd-border text-gray-300 hover:border-gray-500'
+                          }`}
+                        >
+                          <span className="w-3.5 h-3.5 rounded-full border border-black/30" style={{ backgroundColor: oc.color }} />
+                          <span className="text-[11px]">{oc.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Chapéu / Elmo & Armas */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 border-t border-dnd-border/60">
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                      4. Chapéu / Elmo
+                    </label>
+                    <select
+                      value={appearance.headwear}
+                      onChange={e => setAppearance(prev => ({ ...prev, headwear: e.target.value }))}
+                      className="w-full bg-dnd-panel border border-dnd-border rounded-xl px-3 py-2 text-xs text-gray-100 focus:outline-none focus:border-dnd-gold"
+                    >
+                      {HEADWEAR_TYPES.map(hw => (
+                        <option key={hw.id} value={hw.id}>{hw.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                      5. Arma Principal
+                    </label>
+                    <select
+                      value={appearance.weapon}
+                      onChange={e => setAppearance(prev => ({ ...prev, weapon: e.target.value }))}
+                      className="w-full bg-dnd-panel border border-dnd-border rounded-xl px-3 py-2 text-xs text-gray-100 focus:outline-none focus:border-dnd-gold"
+                    >
+                      {WEAPON_TYPES.map(w => (
+                        <option key={w.id} value={w.id}>{w.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                      6. Escudo
+                    </label>
                     <button
-                      key={av}
                       type="button"
-                      onClick={() => setAvatar(av)}
-                      className={`w-10 h-10 rounded-xl text-xl flex items-center justify-center border transition ${
-                        avatar === av ? 'border-dnd-gold bg-dnd-gold/20 scale-110 shadow' : 'border-dnd-border bg-dnd-darker hover:border-gray-500'
+                      onClick={() => setAppearance(prev => ({ ...prev, hasShield: !prev.hasShield }))}
+                      className={`w-full py-2 px-3 rounded-xl border text-xs font-bold transition flex items-center justify-center space-x-1.5 ${
+                        appearance.hasShield
+                          ? 'bg-blue-600/30 border-blue-400 text-blue-300'
+                          : 'bg-dnd-panel border-dnd-border text-gray-400 hover:text-gray-200'
                       }`}
                     >
-                      {av}
+                      <span>🛡️ {appearance.hasShield ? 'Escudo Equipado' : 'Sem Escudo'}</span>
                     </button>
-                  ))}
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1.5">
-                  Cor do Token
-                </label>
-                <div className="flex items-center space-x-2.5">
-                  {COLORS.map(c => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setColor(c)}
-                      className={`w-7 h-7 rounded-full border-2 transition ${
-                        color === c ? 'border-white scale-125 shadow-lg' : 'border-transparent'
-                      }`}
-                      style={{ backgroundColor: c }}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1.5">
-                  Alinhamento Moral
-                </label>
-                <select
-                  value={alignment}
-                  onChange={e => setAlignment(e.target.value)}
-                  className="w-full bg-dnd-darker border border-dnd-border rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-dnd-gold"
-                >
-                  {ALIGNMENTS.map(al => (
-                    <option key={al} value={al}>{al}</option>
-                  ))}
-                </select>
               </div>
             </div>
           )}

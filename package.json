@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "postinstall": "node -e \"try { const fs=require('fs'); if (fs.existsSync('node_modules/rollup/dist/native.js') && fs.existsSync('node_modules/@rollup/wasm-node/dist/native.js')) fs.writeFileSync('node_modules/rollup/dist/native.js', 'module.exports = require(\\\"@rollup/wasm-node/dist/native.js\\\");'); } catch(e){}\"",
     "server": "node server/index.js",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test": "node --test tests/*.test.js"
   },
   "keywords": [
     "dnd",
@@ -35,6 +36,6 @@
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
     "tailwindcss": "^3.4.17",
-    "vite": "^5.4.14"
+    "vite": "^8.3.5"
   }
 }

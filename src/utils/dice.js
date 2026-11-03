@@ -5,36 +5,51 @@ export function rollDie(sides) {
 }
 
 export function parseDiceFormula(formula) {
+  if (!formula || typeof formula !== 'string') return null;
   // Support formulas like "2d6+3", "1d20-1", "d8", "4d6kh3" (4d6 keep highest 3)
   const clean = formula.toLowerCase().replace(/\s+/g, '');
-  const match = clean.match(/^(\d*)d(\d+)([+-]\d+)?$/);
+
+  if (/^[+-]?\d+$/.test(clean)) {
+    const num = parseInt(clean, 10);
+    return { count: 0, sides: 0, mod: num, rolls: [], total: num, raw: formula };
+  }
+
+  const match = clean.match(/^(\d*)d(\d+)(?:(kh|kl)(\d+))?([+-]\d+)?$/);
 
   if (!match) {
-    // Check if it's a pure number
-    const num = parseInt(clean, 10);
-    if (!isNaN(num)) {
-      return { count: 0, sides: 0, mod: num, rolls: [], total: num, raw: formula };
-    }
     return null;
   }
 
   const count = match[1] ? parseInt(match[1], 10) : 1;
   const sides = parseInt(match[2], 10);
-  const mod = match[3] ? parseInt(match[3], 10) : 0;
+  const keepType = match[3];
+  const keepCount = match[4] ? parseInt(match[4], 10) : count;
+  const mod = match[5] ? parseInt(match[5], 10) : 0;
+
+  if (count <= 0 || sides <= 0) return null;
 
   const rolls = [];
-  let sum = 0;
   for (let i = 0; i < count; i++) {
-    const val = rollDie(sides);
-    rolls.push(val);
-    sum += val;
+    rolls.push(rollDie(sides));
   }
+
+  let keptRolls = [...rolls];
+  if (keepType === 'kh') {
+    keptRolls.sort((a, b) => b - a);
+    keptRolls = keptRolls.slice(0, Math.min(keepCount, count));
+  } else if (keepType === 'kl') {
+    keptRolls.sort((a, b) => a - b);
+    keptRolls = keptRolls.slice(0, Math.min(keepCount, count));
+  }
+
+  const sum = keptRolls.reduce((a, b) => a + b, 0);
 
   return {
     count,
     sides,
     mod,
     rolls,
+    keptRolls,
     total: sum + mod,
     raw: formula
   };

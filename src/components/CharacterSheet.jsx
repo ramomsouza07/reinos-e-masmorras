@@ -25,6 +25,7 @@ import {
 } from '../data/dndData';
 import { rollD20, parseDiceFormula } from '../utils/dice';
 import { sounds } from '../utils/soundEffects';
+import Character2DPreview from './Character2DSprite';
 
 export default function CharacterSheet({ character, onUpdate, socket, room }) {
   const [activeTab, setActiveTab] = useState('attributes'); // 'attributes' | 'combat' | 'skills' | 'spells' | 'inventory'
@@ -44,9 +45,79 @@ export default function CharacterSheet({ character, onUpdate, socket, room }) {
   const adjustHp = (delta) => {
     const newHp = Math.max(0, Math.min(character.maxHp, (character.hp || 0) + delta));
     const updated = { ...character, hp: newHp };
-    if (delta > 0) sounds.playHeal();
-    else sounds.playAttack();
+    if (delta > 0) {
+      sounds.playHeal();
+      if ((character.hp || 0) === 0 && newHp > 0) {
+        updated.deathSaves = { successes: 0, failures: 0 };
+      }
+    } else {
+      sounds.playAttack();
+    }
     onUpdate(updated);
+  };
+
+  const deathSaves = character.deathSaves || { successes: 0, failures: 0 };
+
+  // Roll Death Saving Throw (1d20 when hp === 0)
+  const handleRollDeathSave = () => {
+    sounds.playDiceRoll();
+    const result = rollD20(0, advantageType);
+    let newSuccesses = deathSaves.successes || 0;
+    let newFailures = deathSaves.failures || 0;
+    let newHp = character.hp || 0;
+    let narration = '';
+
+    if (result.isNat20) {
+      sounds.playCriticalSuccess();
+      newHp = 1;
+      newSuccesses = 0;
+      newFailures = 0;
+      narration = `🌟 **NATURAL 20!** ${character.name} recuperou a consciência e se ergueu com **1 PV**!`;
+    } else if (result.isNat1) {
+      sounds.playCriticalFail();
+      newFailures = Math.min(3, newFailures + 2);
+      narration = `💀 **DESASTRE CRÍTICO (1)!** ${character.name} acumulou **2 Falhas** contra a Morte! (${newFailures}/3)`;
+    } else if (result.roll >= 10) {
+      sounds.playCriticalSuccess();
+      newSuccesses = Math.min(3, newSuccesses + 1);
+      narration = `✨ **Sucesso!** (${result.roll}) ${character.name} resistiu à Morte! (${newSuccesses}/3 Sucessos)`;
+    } else {
+      sounds.playCriticalFail();
+      newFailures = Math.min(3, newFailures + 1);
+      narration = `🩸 **Falha!** (${result.roll}) A Morte se aproxima de ${character.name}... (${newFailures}/3 Falhas)`;
+    }
+
+    if (newSuccesses >= 3 && newHp === 0) {
+      narration += `\n🛡️ **ESTABILIZADO!** ${character.name} estabilizou seus sinais vitais!`;
+    }
+    if (newFailures >= 3) {
+      narration += `\n⚰️ **MORTE!** O destino ceifou a alma de ${character.name}... Que sua lenda seja lembrada!`;
+    }
+
+    const updated = {
+      ...character,
+      hp: newHp,
+      deathSaves: { successes: newSuccesses, failures: newFailures }
+    };
+    onUpdate(updated);
+
+    socket.emit('chat:send', {
+      sender: character.name,
+      senderType: 'player',
+      type: 'roll',
+      content: narration,
+      rollData: {
+        title: `Teste contra a Morte: ${character.name}`,
+        ...result
+      }
+    });
+  };
+
+  const handleResetDeathSaves = () => {
+    onUpdate({
+      ...character,
+      deathSaves: { successes: 0, failures: 0 }
+    });
   };
 
   // Spend unspent attribute point or edit attribute
@@ -185,8 +256,12 @@ export default function CharacterSheet({ character, onUpdate, socket, room }) {
         {/* CHARACTER HEADER */}
         <div className="bg-dnd-panel border border-dnd-border rounded-2xl p-4 shadow-xl flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center space-x-3.5">
-            <div className="w-16 h-16 rounded-2xl bg-dnd-darker border-2 border-dnd-gold flex items-center justify-center text-3xl shadow-inner">
-              {character.avatar || '⚔️'}
+            <div className="w-16 h-16 rounded-2xl bg-dnd-darker border-2 border-dnd-gold flex items-center justify-center overflow-hidden shadow-inner">
+              {character.appearance ? (
+                <Character2DPreview appearance={character.appearance} size={64} />
+              ) : (
+                <span className="text-3xl">{character.avatar || '⚔️'}</span>
+              )}
             </div>
             <div>
               <div className="flex items-center space-x-2">
@@ -252,6 +327,94 @@ export default function CharacterSheet({ character, onUpdate, socket, room }) {
                 <p className="text-xs text-emerald-200">
                   Clique no botão "+1" em qualquer atributo abaixo para fortalecer seu herói permanentemente.
                 </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* DEATH SAVING THROWS (Ativo ao cair a 0 PV) */}
+        {character.hp === 0 && (
+          <div className="bg-red-950/90 border-2 border-red-600 rounded-2xl p-4 shadow-2xl space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-red-800/80 pb-2">
+              <div className="flex items-center space-x-2">
+                <span className="text-2xl">💀</span>
+                <div>
+                  <h3 className="font-cinzel font-black text-sm text-red-200 uppercase tracking-wider">
+                    Inconsciente — Testes contra a Morte (Death Saving Throws)
+                  </h3>
+                  <p className="text-xs text-red-300">
+                    Ao chegar a 0 PV, role 1d20 no seu turno. 10+ é Sucesso (3 para estabilizar). 9- é Falha (3 para falecer). Nat 20 levanta com 1 PV! Nat 1 conta como 2 falhas!
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={handleRollDeathSave}
+                  disabled={deathSaves.failures >= 3}
+                  className="bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-cinzel font-black px-4 py-2 rounded-xl text-xs transition shadow flex items-center space-x-1.5"
+                >
+                  <span>🎲 Rolar Teste contra a Morte (1d20)</span>
+                </button>
+                <button
+                  onClick={handleResetDeathSaves}
+                  className="text-[10px] text-gray-400 hover:text-white underline px-1"
+                >
+                  Reiniciar
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+              {/* Sucessos */}
+              <div className="bg-black/40 border border-emerald-900/60 rounded-xl p-3 flex items-center justify-between">
+                <div>
+                  <span className="font-cinzel font-bold text-xs text-emerald-400 uppercase tracking-wider block">
+                    Sucessos ({deathSaves.successes || 0} / 3)
+                  </span>
+                  <span className="text-[11px] text-gray-400">
+                    {deathSaves.successes >= 3 ? '🎉 Personagem Estabilizado!' : '3 sucessos estabilizam o herói'}
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  {[1, 2, 3].map(i => (
+                    <div
+                      key={i}
+                      className={`w-6 h-6 rounded-full border-2 flex items-center justify-center text-xs font-bold transition ${
+                        (deathSaves.successes || 0) >= i
+                          ? 'bg-emerald-500 border-emerald-300 text-black shadow-lg shadow-emerald-500/50'
+                          : 'border-emerald-800 bg-emerald-950/40 text-emerald-700'
+                      }`}
+                    >
+                      ✓
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Falhas */}
+              <div className="bg-black/40 border border-red-900/60 rounded-xl p-3 flex items-center justify-between">
+                <div>
+                  <span className="font-cinzel font-bold text-xs text-red-400 uppercase tracking-wider block">
+                    Falhas ({deathSaves.failures || 0} / 3)
+                  </span>
+                  <span className="text-[11px] text-gray-400">
+                    {deathSaves.failures >= 3 ? '⚰️ Personagem Derrotado' : '3 falhas resultam em morte'}
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  {[1, 2, 3].map(i => (
+                    <div
+                      key={i}
+                      className={`w-6 h-6 rounded-full border-2 flex items-center justify-center text-xs font-bold transition ${
+                        (deathSaves.failures || 0) >= i
+                          ? 'bg-red-600 border-red-300 text-white shadow-lg shadow-red-600/50'
+                          : 'border-red-900 bg-red-950/40 text-red-800'
+                      }`}
+                    >
+                      ✗
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
@@ -372,7 +535,7 @@ export default function CharacterSheet({ character, onUpdate, socket, room }) {
                               <div>
                                 <h4 className="font-cinzel font-bold text-sm text-gray-100">{ab.name} ({ab.abbr})</h4>
                                 {hasSaveProf && (
-                                  <span className="text-[10px] text-emerald-400 font-semibold">★ Proficiente em Salvaguarda</span>
+                                   <span className="text-[10px] text-emerald-400 font-semibold">★ Proficiente em Salvaguarda</span>
                                 )}
                               </div>
                             </div>

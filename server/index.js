@@ -12,12 +12,14 @@ import {
   ITEMS, 
   CLASSES,
   RACES,
+  STORY_CAMPAIGN,
   getAbilityMod, 
   formatMod,
   LEVEL_XP_TABLE,
   calculateCharacterDerivedStats
 } from '../src/data/dndData.js';
 import { rollD20, parseDiceFormula, rollDie } from '../src/utils/dice.js';
+import { isTileBlocked } from '../src/utils/pathfinding.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,8 +34,8 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3001;
-const DATA_DIR = path.join(__dirname, '../data');
-const ROOMS_FILE = path.join(DATA_DIR, 'rooms.json');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
+const ROOMS_FILE = process.env.ROOMS_FILE || path.join(DATA_DIR, 'rooms.json');
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -41,6 +43,11 @@ if (!fs.existsSync(DATA_DIR)) {
 
 let rooms = {};
 const aiTurnTimeouts = {};
+
+// Helper to verify if caller socket is DM in the current room
+function isSocketDM(room, socketId) {
+  return room && room.players && room.players[socketId]?.role === 'dm';
+}
 
 // Helper to build monster token from monster template
 function createMonsterToken(monsterId, x, y, customName) {
@@ -65,6 +72,101 @@ function createMonsterToken(monsterId, x, y, customName) {
     actions: template.actions || [],
     stats: template.stats || { str: 12, dex: 12, con: 12, int: 10, wis: 10, cha: 10 }
   };
+}
+
+// Helper to build NPC token from template
+function createNPCToken(npc) {
+  return {
+    id: npc.id || `npc_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+    name: npc.name,
+    role: npc.role,
+    type: 'npc',
+    x: npc.x,
+    y: npc.y,
+    size: 1,
+    hp: 100,
+    maxHp: 100,
+    ac: 15,
+    speed: 9,
+    avatar: npc.avatar || '🧙‍♂️',
+    color: '#ca8a04',
+    appearance: npc.appearance,
+    dialogue: npc.dialogue,
+    hasShop: npc.hasShop || false,
+    shopItems: npc.shopItems || []
+  };
+}
+
+// Helper to load a Land from STORY_CAMPAIGN into room
+function loadLandIntoRoom(room, landId = 'land_forest') {
+  const land = STORY_CAMPAIGN.lands.find(l => l.id === landId) || STORY_CAMPAIGN.lands[0];
+  const mapPreset = MAP_PRESETS.find(m => m.id === land.id) || MAP_PRESETS[0];
+
+  room.currentLandId = land.id;
+  room.currentAdventureId = land.id;
+  room.bossDefeated = false;
+  room.portalPosition = land.portalPosition;
+  room.portalName = land.portalName;
+  room.map = {
+    ...mapPreset,
+    gridSize: land.gridSize || 52,
+    cols: land.cols || 46,
+    rows: land.rows || 32
+  };
+
+  // Preserve existing players and reposition them to land.startPosition
+  const playerTokens = (room.tokens || []).filter(t => t.type === 'player');
+  playerTokens.forEach((pt, idx) => {
+    pt.x = land.startPosition.x + (idx % 3);
+    pt.y = land.startPosition.y + Math.floor(idx / 3);
+  });
+
+  // Spawn Land NPCs
+  const npcTokens = (land.npcs || []).map(npc => createNPCToken(npc));
+
+  // Spawn Land Normal Enemies
+  const enemyTokens = (land.enemies || []).map(e => createMonsterToken(e.monsterId, e.x, e.y, e.name));
+
+  // Spawn Land Boss
+  if (land.boss) {
+    const bossTemplate = MONSTERS.find(m => m.id === land.boss.monsterId) || MONSTERS[0];
+    const bossToken = {
+      id: `boss_${land.boss.monsterId}_${Date.now()}`,
+      monsterId: land.boss.monsterId,
+      name: land.boss.name,
+      title: land.boss.title,
+      type: 'enemy',
+      isBoss: true,
+      x: land.boss.x,
+      y: land.boss.y,
+      size: land.boss.size || 2,
+      hp: land.boss.hp || bossTemplate.hp,
+      maxHp: land.boss.maxHp || bossTemplate.maxHp,
+      ac: land.boss.ac || bossTemplate.ac,
+      speed: land.boss.speed || 9,
+      xp: land.boss.xp || 500,
+      goldDrop: land.boss.goldDrop || 200,
+      avatar: land.boss.avatar || '👑',
+      color: land.boss.color || '#9333ea',
+      actions: land.boss.actions || bossTemplate.actions,
+      stats: bossTemplate.stats || { str: 16, dex: 14, con: 16, int: 10, wis: 10, cha: 10 }
+    };
+    enemyTokens.push(bossToken);
+  }
+
+  room.tokens = [...playerTokens, ...npcTokens, ...enemyTokens];
+  room.chests = JSON.parse(JSON.stringify(land.chests || []));
+  room.gatherables = JSON.parse(JSON.stringify(land.gatherables || []));
+  room.corpses = [];
+  room.combat = { active: false, round: 1, currentTurnIndex: 0, turnOrder: [] };
+  if (!room.collectedRelics) room.collectedRelics = [];
+
+  addRoomMessage(room.id, {
+    sender: '📜 A Lenda de Eldoria',
+    senderType: 'dm',
+    type: 'narration',
+    content: `🗺️ **BEM-VINDOS A ${land.name.toUpperCase()}!**\n${land.description}\n\n⚔️ **Objetivo**: Falem com os NPCs no acampamento, explorem as redondezas e derrotem **${land.bossName}** para abrir a passagem!`
+  });
 }
 
 // Helper to create a default character if a player joins without one
@@ -105,43 +207,24 @@ function createDefaultHero(playerName) {
   return char;
 }
 
-// Create initial room populated with Adventure Act 1 so there are immediately enemies & chests!
+// Create initial room populated with Land 1 (Floresta)
 function createInitialRoom(roomId, roomName, dmPass) {
-  const initialAdventure = ADVENTURES[0];
-  const mapPreset = MAP_PRESETS.find(m => m.id === initialAdventure.mapId) || MAP_PRESETS[0];
-
-  const initialEnemies = initialAdventure.enemies.map(e => 
-    createMonsterToken(e.monsterId, e.x, e.y, e.name)
-  );
-
-  return {
+  const room = {
     id: roomId,
     name: roomName || `Aventura ${roomId}`,
     dmPass: dmPass || 'mestre123',
     createdAt: new Date().toISOString(),
-    autoDM: true, // Mestre Automático ativado por padrão!
-    fogEnabled: false, // Sem escuridão bloqueando visão por padrão!
-    currentAdventureId: initialAdventure.id,
-    map: {
-      ...mapPreset,
-      gridSize: 52
-    },
-    fog: [],
-    tokens: initialEnemies,
-    chests: JSON.parse(JSON.stringify(initialAdventure.chests || [])),
-    combat: {
-      active: false,
-      round: 1,
-      currentTurnIndex: 0,
-      turnOrder: []
-    },
+    autoDM: true,
+    fogEnabled: false,
+    collectedRelics: [],
+    tokens: [],
     chatHistory: [
       {
         id: 'msg_init_1',
-        sender: '🤖 Mestre Automático',
+        sender: '📜 A Lenda de Eldoria',
         senderType: 'dm',
         type: 'narration',
-        content: initialAdventure.narration,
+        content: `⚔️ **BEM-VINDOS A ELDORIA!** Quatro grandes Lands guardam as Quatro Relíquias Ancestrais. Explorem cada região, conversem com os NPCs [E], coletem itens e derrotem os Chefes para abrir caminho!`,
         timestamp: Date.now()
       },
       {
@@ -154,9 +237,11 @@ function createInitialRoom(roomId, roomName, dmPass) {
     ],
     players: {}
   };
+  loadLandIntoRoom(room, 'land_forest');
+  return room;
 }
 
-// Load saved rooms and upgrade any empty ones
+// Load saved rooms and upgrade any legacy ones to STORY_CAMPAIGN Lands
 try {
   if (fs.existsSync(ROOMS_FILE)) {
     const raw = fs.readFileSync(ROOMS_FILE, 'utf-8');
@@ -164,15 +249,20 @@ try {
     Object.values(rooms).forEach(r => {
       if (r.autoDM === undefined) r.autoDM = true;
       if (r.fogEnabled === undefined) r.fogEnabled = false;
-      if (!r.chests) r.chests = JSON.parse(JSON.stringify(ADVENTURES[0].chests));
-      // Ensure map has obstacles & floorColor from preset
-      const preset = MAP_PRESETS.find(m => m.id === r.map?.id) || MAP_PRESETS[0];
-      r.map = { ...preset, ...r.map, obstacles: preset.obstacles, torches: preset.torches, floorColor: preset.floorColor };
-      // If room has 0 enemies, spawn initial adventure enemies so player has enemies to fight
-      const hasEnemies = (r.tokens || []).some(t => t.type === 'enemy');
-      if (!hasEnemies) {
-        const defaultEnemies = ADVENTURES[0].enemies.map(e => createMonsterToken(e.monsterId, e.x, e.y, e.name));
-        r.tokens = [...(r.tokens || []), ...defaultEnemies];
+      const validLand = STORY_CAMPAIGN.lands.find(l => l.id === r.currentLandId);
+      if (!validLand) {
+        loadLandIntoRoom(r, 'land_forest');
+      } else {
+        const preset = MAP_PRESETS.find(m => m.id === validLand.id) || MAP_PRESETS[0];
+        r.map = {
+          ...preset,
+          gridSize: validLand.gridSize || 52,
+          cols: validLand.cols || 46,
+          rows: validLand.rows || 32
+        };
+        r.portalPosition = validLand.portalPosition;
+        r.portalName = validLand.portalName;
+        if (!r.gatherables) r.gatherables = JSON.parse(JSON.stringify(validLand.gatherables || []));
       }
     });
     console.log(`[Storage] Carregadas e atualizadas ${Object.keys(rooms).length} salas.`);
@@ -197,6 +287,7 @@ function scheduleSave() {
       saveRoomsToDisk();
       saveTimeout = null;
     }, 3000);
+    if (saveTimeout.unref) saveTimeout.unref();
   }
 }
 
@@ -213,11 +304,11 @@ function addRoomMessage(roomId, msgData) {
   if (!room) return;
   const msg = {
     id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-    sender: msgData.sender || 'Sistema',
-    senderType: msgData.senderType || 'system',
-    type: msgData.type || 'chat',
-    content: msgData.content || '',
-    rollData: msgData.rollData || null,
+    sender: msgData?.sender || 'Sistema',
+    senderType: msgData?.senderType || 'system',
+    type: msgData?.type || 'chat',
+    content: msgData?.content || '',
+    rollData: msgData?.rollData || null,
     timestamp: Date.now()
   };
   room.chatHistory.push(msg);
@@ -292,6 +383,69 @@ function handleEnemyDefeated(roomId, defeatedToken, attackerName) {
       senderType: 'dm',
       type: 'narration',
       content: `🎉 **SUBIU DE NÍVEL!** ${levelUpNames.join(', ')}! Vida restaurada e **+2 Pontos de Atributo** disponíveis na Ficha!`
+    });
+  }
+
+  // Tibia Corpse & Loot Drop on Tile
+  if (!room.corpses) room.corpses = [];
+  const bonusLootGold = Math.floor(Math.random() * 15) + 8;
+  const dropPool = ['pocao_cura', 'pocao_cura_maior', 'adaga', 'espada_curta', 'escudo', 'antidoto'];
+  const droppedItems = [];
+  if (Math.random() < 0.65) {
+    const rId = dropPool[Math.floor(Math.random() * dropPool.length)];
+    if (ITEMS[rId]) droppedItems.push({ ...ITEMS[rId], id: `loot_${Date.now()}_${Math.floor(Math.random() * 1000)}` });
+  }
+  const newCorpse = {
+    id: `corpse_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+    name: `Corpo de ${defeatedToken.name}`,
+    monsterName: defeatedToken.name,
+    avatar: defeatedToken.avatar || '💀',
+    x: defeatedToken.x,
+    y: defeatedToken.y,
+    gold: bonusLootGold,
+    items: droppedItems,
+    opened: false,
+    createdAt: Date.now()
+  };
+  room.corpses.push(newCorpse);
+  io.to(roomId).emit('room:corpses_updated', room.corpses);
+
+  // Handle Land Boss Defeat & Portal Unlock
+  if (defeatedToken.isBoss) {
+    room.bossDefeated = true;
+    const currentLand = STORY_CAMPAIGN.lands.find(l => l.id === room.currentLandId) || STORY_CAMPAIGN.lands[0];
+    const relic = currentLand.relicReward;
+    if (relic && !room.collectedRelics.includes(relic.id)) {
+      room.collectedRelics.push(relic.id);
+    }
+
+    // Distribute relic to player inventories
+    Object.values(room.players).forEach(p => {
+      if (p.character && relic) {
+        if (!p.character.inventory) p.character.inventory = [];
+        p.character.inventory.push({
+          id: relic.id,
+          name: relic.name,
+          type: 'magic',
+          desc: relic.desc,
+          cost: 1000
+        });
+      }
+    });
+
+    io.to(roomId).emit('room:boss_defeated', {
+      landId: room.currentLandId,
+      bossName: defeatedToken.name,
+      relic,
+      portalPosition: room.portalPosition,
+      portalName: room.portalName
+    });
+
+    addRoomMessage(roomId, {
+      sender: '🏆 Mestre da Campanha',
+      senderType: 'dm',
+      type: 'narration',
+      content: `🎉 **O CHEFÃO DA TERRA FOI DESTRUÍDO!**\n**${defeatedToken.name}** tombou perante a bravura do grupo!\nVocês conquistaram a relíquia lendária: **${relic ? relic.name : 'Relíquia Antiga'}** (${relic ? relic.icon : '✨'})!\n\n🌀 **A BARREIRA MÁGICA FOI DISSIPADA!** O portal para a próxima Land (${room.portalName || 'Portal Ancestral'}) no sudeste do mapa foi ativado! Reúnam o grupo e pressionem [E] no portal para avançar!`
     });
   }
 
@@ -538,15 +692,195 @@ function scheduleAutoDMTurn(roomId, enemyTokenId) {
       });
     }
 
-    // Advance to next turn after 1.1s
+    // Advance to next turn after fast delay (450ms) for snappy dynamic combat
     aiTurnTimeouts[roomId] = setTimeout(() => {
       advanceCombatTurn(roomId);
-    }, 1100);
-  }, 1100);
+    }, 450);
+  }, 450);
 }
+
+// ============================================================================
+// REAL-TIME MMORPG AGGRO & CHASE ENGINE (Distância <= 2 inicia perseguição!)
+// ============================================================================
+function processRoomMMORPGAggro(roomId, onlyAcquireAggro = false) {
+  const room = rooms[roomId];
+  if (!room || !room.tokens || room.autoDM === false) return;
+
+  const hasOnlinePlayers = Object.values(room.players || {}).some(p => p.online);
+  if (!hasOnlinePlayers) return;
+
+  const playerTokens = room.tokens.filter(t => t.type === 'player' && (t.hp ?? 10) > 0);
+  if (playerTokens.length === 0) return;
+
+  const now = Date.now();
+  const cols = room.map?.cols || 46;
+  const rows = room.map?.rows || 32;
+  const obstacles = room.map?.obstacles || [];
+
+  const enemies = room.tokens.filter(t => t.type === 'enemy' && (t.hp ?? 10) > 0);
+  enemies.forEach(enemy => {
+    // 1. Encontra o jogador vivo mais próximo
+    let closestPlayer = null;
+    let minDist = Infinity;
+    playerTokens.forEach(pt => {
+      const d = getGridDistance(enemy, pt);
+      if (d < minDist) {
+        minDist = d;
+        closestPlayer = pt;
+      }
+    });
+
+    // 2. Se um jogador passar a <= 2 de distância, o inimigo adquire aggro e passa a persegui-lo!
+    if (!enemy.aggroTargetId && closestPlayer && minDist <= 2) {
+      enemy.aggroTargetId = closestPlayer.id;
+      io.to(roomId).emit('combat:visual_effect', {
+        fromX: enemy.x,
+        fromY: enemy.y,
+        toX: enemy.x,
+        toY: enemy.y,
+        text: `❗ ${enemy.name}!`,
+        color: '#EF4444',
+        effectType: 'alert'
+      });
+      io.to(roomId).emit('room:tokens_updated', room.tokens);
+    }
+
+    if (onlyAcquireAggro || !enemy.aggroTargetId) return;
+
+    // 3. Valida alvo atual e distância de desistência (leash > 9 quadrados)
+    let target = playerTokens.find(p => p.id === enemy.aggroTargetId);
+    if (!target || getGridDistance(enemy, target) > 9) {
+      if (closestPlayer && minDist <= 2) {
+        enemy.aggroTargetId = closestPlayer.id;
+        target = closestPlayer;
+      } else {
+        enemy.aggroTargetId = null;
+        io.to(roomId).emit('room:tokens_updated', room.tokens);
+        return;
+      }
+    } else if (closestPlayer && minDist <= 1 && closestPlayer.id !== target.id) {
+      // Troca para jogador colado se houver
+      enemy.aggroTargetId = closestPlayer.id;
+      target = closestPlayer;
+    }
+
+    const dist = getGridDistance(enemy, target);
+
+    // 4. Perseguição em Tempo Real: se dist > 1, anda 1 quadrado na direção do jogador
+    if (dist > 1) {
+      const candidates = [];
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = enemy.x + dx;
+          const ny = enemy.y + dy;
+          if (isTileBlocked(nx, ny, obstacles, cols, rows)) continue;
+          const occupied = room.tokens.some(t => t.id !== enemy.id && (t.hp ?? 10) > 0 && t.x === nx && t.y === ny);
+          if (occupied) continue;
+          const remDist = Math.hypot(target.x - nx, target.y - ny);
+          candidates.push({ nx, ny, remDist });
+        }
+      }
+      candidates.sort((a, b) => a.remDist - b.remDist);
+      if (candidates.length > 0 && candidates[0].remDist < Math.hypot(target.x - enemy.x, target.y - enemy.y) + 0.2) {
+        enemy.x = candidates[0].nx;
+        enemy.y = candidates[0].ny;
+        io.to(roomId).emit('room:token_moved', {
+          tokenId: enemy.id,
+          x: enemy.x,
+          y: enemy.y,
+          aggroTargetId: enemy.aggroTargetId
+        });
+      }
+    }
+
+    // 5. Ataque em Tempo Real: se estiver adjacente (dist <= 1.5), golpeia o jogador a cada 1.5s
+    const newDist = getGridDistance(enemy, target);
+    if (newDist <= 1.5 && now - (enemy.lastAttackAt || 0) >= 1500) {
+      enemy.lastAttackAt = now;
+      const action = (enemy.actions && enemy.actions[0]) || { name: 'Ataque', bonus: 4, damage: '1d6+2' };
+      const atkRoll = rollD20(action.bonus || 4);
+      const targetAc = target.ac || 14;
+      const isHit = atkRoll.isNat20 || (!atkRoll.isNat1 && atkRoll.total >= targetAc);
+
+      if (isHit) {
+        const parsedDmg = parseDiceFormula(action.damage || '1d6+2');
+        let dmg = parsedDmg ? parsedDmg.total : 4;
+        if (atkRoll.isNat20) dmg += 4;
+        dmg = Math.max(1, dmg);
+
+        target.hp = Math.max(0, (target.hp || 10) - dmg);
+        Object.values(room.players).forEach(p => {
+          if (p.character && p.character.id === target.characterId) {
+            p.character.hp = target.hp;
+          }
+        });
+
+        io.to(roomId).emit('combat:visual_effect', {
+          fromX: enemy.x,
+          fromY: enemy.y,
+          toX: target.x,
+          toY: target.y,
+          text: `${atkRoll.isNat20 ? '💥 CRÍTICO! ' : ''}-${dmg} PV`,
+          color: '#EF4444',
+          effectType: 'slash',
+          isCrit: atkRoll.isNat20
+        });
+
+        // Se o jogador chegar a 0 PV, renasce no Acampamento Seguro da Land (estilo MMORPG)
+        if (target.hp <= 0) {
+          const currentLand = STORY_CAMPAIGN.lands.find(l => l.id === room.currentLandId) || STORY_CAMPAIGN.lands[0];
+          const spawn = currentLand.startPosition || { x: 23, y: 16 };
+          target.x = spawn.x;
+          target.y = spawn.y;
+          target.hp = target.maxHp || 12;
+          enemy.aggroTargetId = null;
+
+          Object.values(room.players).forEach(p => {
+            if (p.character && p.character.id === target.characterId) {
+              p.character.hp = target.hp;
+              io.to(p.socketId).emit('character:sync', p.character);
+            }
+          });
+
+          addRoomMessage(roomId, {
+            sender: '✨ Santuário de Eldoria',
+            senderType: 'system',
+            content: `💀 **${target.name}** tombou diante de **${enemy.name}** e foi resgatado de volta ao Acampamento Seguro com vida restaurada!`
+          });
+        }
+
+        io.to(roomId).emit('room:tokens_updated', room.tokens);
+        io.to(roomId).emit('room:players_updated', room.players);
+      } else {
+        io.to(roomId).emit('combat:visual_effect', {
+          fromX: enemy.x,
+          fromY: enemy.y,
+          toX: target.x,
+          toY: target.y,
+          text: `🛡️ Esquivou!`,
+          color: '#94A3B8',
+          effectType: 'miss'
+        });
+      }
+    }
+  });
+}
+
+const mmorpgLoopInterval = setInterval(() => {
+  Object.keys(rooms).forEach(roomId => {
+    processRoomMMORPGAggro(roomId, false);
+  });
+}, 650);
+if (mmorpgLoopInterval.unref) mmorpgLoopInterval.unref();
 
 app.use(cors());
 app.use(express.json());
+
+const publicPath = path.join(__dirname, '../public');
+if (fs.existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+}
 
 const distPath = path.join(__dirname, '../dist');
 if (fs.existsSync(distPath)) {
@@ -554,7 +888,12 @@ if (fs.existsSync(distPath)) {
 }
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString(), roomsCount: Object.keys(rooms).length });
+  res.json({
+    status: 'ok',
+    time: new Date().toISOString(),
+    uptime: process.uptime(),
+    roomsCount: Object.keys(rooms).length
+  });
 });
 
 app.get('/api/rooms', (req, res) => {
@@ -572,109 +911,139 @@ app.get('/api/rooms', (req, res) => {
 io.on('connection', (socket) => {
   let currentRoomId = null;
 
-  socket.on('room:join', ({ roomId, playerName, role, dmPass, character }) => {
-    if (!roomId) return;
-    const cleanRoomId = roomId.trim().toUpperCase();
-    currentRoomId = cleanRoomId;
-
-    if (!rooms[cleanRoomId]) {
-      rooms[cleanRoomId] = createInitialRoom(cleanRoomId, `Sala ${cleanRoomId}`, dmPass);
-    }
-
-    const room = rooms[cleanRoomId];
-    const isDM = role === 'dm' && (!room.dmPass || room.dmPass === dmPass || dmPass === 'mestre123');
-
-    // Ensure every player has a valid character!
-    let activeChar = character;
-    if (!isDM && !activeChar) {
-      activeChar = createDefaultHero(playerName);
-    }
-
-    // Clean up old disconnected sockets with same characterId to avoid duplicates
-    if (activeChar) {
-      Object.keys(room.players).forEach(sid => {
-        if (sid !== socket.id && room.players[sid]?.character?.id === activeChar.id && !room.players[sid].online) {
-          delete room.players[sid];
-        }
-      });
-    }
-
-    room.players[socket.id] = {
-      socketId: socket.id,
-      name: activeChar?.name || playerName || (isDM ? 'Mestre da Mesa' : 'Aventureiro'),
-      role: isDM ? 'dm' : 'player',
-      character: activeChar || null,
-      online: true,
-      lastActive: Date.now()
-    };
-
-    socket.join(cleanRoomId);
-
-    // Always place or sync player's token on the map!
-    if (activeChar) {
-      const derived = calculateCharacterDerivedStats(activeChar);
-      activeChar.ac = derived.ac;
-      activeChar.proficiencyBonus = derived.profBonus;
-
-      let existingToken = room.tokens.find(t => t.characterId === activeChar.id);
-      if (!existingToken) {
-        const playerTokensCount = room.tokens.filter(t => t.type === 'player').length;
-        const spawnPositions = [
-          { x: 3, y: 7 }, { x: 3, y: 5 }, { x: 3, y: 9 },
-          { x: 2, y: 6 }, { x: 2, y: 8 }, { x: 4, y: 7 }
-        ];
-        const pos = spawnPositions[playerTokensCount % spawnPositions.length];
-
-        existingToken = {
-          id: `token_${activeChar.id}`,
-          characterId: activeChar.id,
-          name: activeChar.name,
-          type: 'player',
-          x: pos.x,
-          y: pos.y,
-          size: 1,
-          hp: activeChar.hp || 12,
-          maxHp: activeChar.maxHp || 12,
-          ac: activeChar.ac || 15,
-          speed: activeChar.speed || 9,
-          avatar: activeChar.avatar || '⚔️',
-          color: activeChar.color || '#3B82F6',
-          stats: activeChar.stats || { str: 14, dex: 12, con: 14, int: 10, wis: 12, cha: 10 },
-          conditions: []
-        };
-        room.tokens.push(existingToken);
-      } else {
-        existingToken.name = activeChar.name;
-        existingToken.hp = activeChar.hp;
-        existingToken.maxHp = activeChar.maxHp;
-        existingToken.ac = activeChar.ac;
-        existingToken.avatar = activeChar.avatar;
-        existingToken.color = activeChar.color;
-        existingToken.stats = activeChar.stats;
+  socket.on('room:join', (data = {}) => {
+    try {
+      const { roomId, playerName, role, dmPass, character } = data || {};
+      if (!roomId) {
+        socket.emit('room:error', { message: 'Código da sala não fornecido.' });
+        return;
       }
+      const cleanRoomId = typeof roomId === 'string' ? roomId.trim().toUpperCase() : String(roomId).trim().toUpperCase();
+      if (!cleanRoomId) {
+        socket.emit('room:error', { message: 'Código da sala inválido.' });
+        return;
+      }
+      currentRoomId = cleanRoomId;
+
+      if (!rooms[cleanRoomId]) {
+        rooms[cleanRoomId] = createInitialRoom(cleanRoomId, `Sala ${cleanRoomId}`, dmPass);
+      }
+
+      const room = rooms[cleanRoomId];
+      if (!room.players) room.players = {};
+      if (!room.tokens) room.tokens = [];
+      if (!room.corpses) room.corpses = [];
+
+      const isDM = role === 'dm' && (!room.dmPass || room.dmPass === dmPass);
+
+      // Ensure every player has a valid character!
+      let activeChar = character;
+      if (!isDM && !activeChar) {
+        activeChar = createDefaultHero(playerName);
+      }
+
+      // Normalize inventory if present
+      if (activeChar && Array.isArray(activeChar.inventory)) {
+        activeChar.inventory = activeChar.inventory
+          .map(i => typeof i === 'string' ? (ITEMS[i] || null) : i)
+          .filter(Boolean);
+      }
+
+      // Clean up old disconnected sockets with same characterId to avoid duplicates
+      if (activeChar) {
+        Object.keys(room.players).forEach(sid => {
+          if (sid !== socket.id && room.players[sid]?.character?.id === activeChar.id && !room.players[sid].online) {
+            delete room.players[sid];
+          }
+        });
+      }
+
+      room.players[socket.id] = {
+        socketId: socket.id,
+        name: activeChar?.name || playerName || (isDM ? 'Mestre da Mesa' : 'Aventureiro'),
+        role: isDM ? 'dm' : 'player',
+        character: activeChar || null,
+        online: true,
+        lastActive: Date.now()
+      };
+
+      socket.join(cleanRoomId);
+
+      // Always place or sync player's token on the map!
+      if (activeChar) {
+        const derived = calculateCharacterDerivedStats(activeChar);
+        activeChar.ac = derived.ac;
+        activeChar.proficiencyBonus = derived.profBonus;
+
+        const currentLand = STORY_CAMPAIGN.lands.find(l => l.id === room.currentLandId) || STORY_CAMPAIGN.lands[0];
+        const baseSpawn = currentLand.startPosition || { x: 23, y: 16 };
+
+        let existingToken = room.tokens.find(t => t.characterId === activeChar.id);
+        if (!existingToken) {
+          const playerTokensCount = room.tokens.filter(t => t.type === 'player').length;
+          const pos = {
+            x: baseSpawn.x + (playerTokensCount % 3),
+            y: baseSpawn.y + Math.floor(playerTokensCount / 3)
+          };
+
+          existingToken = {
+            id: `token_${activeChar.id}`,
+            characterId: activeChar.id,
+            name: activeChar.name,
+            type: 'player',
+            x: pos.x,
+            y: pos.y,
+            size: 1,
+            hp: activeChar.hp || 12,
+            maxHp: activeChar.maxHp || 12,
+            ac: activeChar.ac || 15,
+            speed: activeChar.speed || 9,
+            avatar: activeChar.avatar || '⚔️',
+            color: activeChar.color || '#3B82F6',
+            appearance: activeChar.appearance || null,
+            stats: activeChar.stats || { str: 14, dex: 12, con: 14, int: 10, wis: 12, cha: 10 },
+            conditions: []
+          };
+          room.tokens.push(existingToken);
+        } else {
+          existingToken.name = activeChar.name;
+          existingToken.hp = activeChar.hp;
+          existingToken.maxHp = activeChar.maxHp;
+          existingToken.ac = activeChar.ac;
+          existingToken.avatar = activeChar.avatar;
+          existingToken.color = activeChar.color;
+          existingToken.appearance = activeChar.appearance || existingToken.appearance;
+          existingToken.stats = activeChar.stats;
+        }
+      }
+
+      console.log(`[Sala] ${room.players[socket.id].name} entrou em ${cleanRoomId} (${isDM ? 'Mestre' : 'Jogador'})`);
+
+      socket.emit('room:state', {
+        ...room,
+        isDM,
+        myPlayerId: socket.id
+      });
+
+      if (activeChar) {
+        socket.emit('character:sync', activeChar);
+      }
+
+      io.to(cleanRoomId).emit('room:player_joined', {
+        player: room.players[socket.id],
+        players: room.players,
+        tokens: room.tokens
+      });
+
+      scheduleSave();
+    } catch (err) {
+      console.error('[Socket] Erro inesperado em room:join:', err);
+      socket.emit('room:error', { message: 'Erro ao entrar na sala: ' + (err.message || String(err)) });
     }
-
-    socket.emit('room:state', {
-      ...room,
-      isDM,
-      myPlayerId: socket.id
-    });
-
-    if (activeChar) {
-      socket.emit('character:sync', activeChar);
-    }
-
-    io.to(cleanRoomId).emit('room:player_joined', {
-      player: room.players[socket.id],
-      players: room.players,
-      tokens: room.tokens
-    });
-
-    scheduleSave();
   });
 
   // Toggle Auto-DM
-  socket.on('autodm:toggle', ({ enabled }) => {
+  socket.on('autodm:toggle', ({ enabled } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
     const room = rooms[currentRoomId];
     room.autoDM = enabled !== undefined ? enabled : !room.autoDM;
@@ -689,7 +1058,6 @@ io.on('connection', (socket) => {
         : '⏸️ **Mestre Automático PAUSADO.** Controle manual de inimigos habilitado.'
     });
 
-    // If currently on an enemy turn in combat and autoDM was just enabled, trigger it!
     if (room.autoDM && room.combat?.active) {
       const activeTokId = room.combat.turnOrder[room.combat.currentTurnIndex];
       const activeTok = room.tokens.find(t => t.id === activeTokId);
@@ -700,56 +1068,36 @@ io.on('connection', (socket) => {
     scheduleSave();
   });
 
-  // Load Adventure Act / Campaign Mission
-  socket.on('adventure:load', ({ adventureId }) => {
+  // Load Adventure Act / Campaign Land
+  socket.on('adventure:load', ({ adventureId } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
     const room = rooms[currentRoomId];
-    const adv = ADVENTURES.find(a => a.id === adventureId) || ADVENTURES[0];
-    const mapPreset = MAP_PRESETS.find(m => m.id === adv.mapId) || MAP_PRESETS[0];
 
-    // Keep player tokens and reset their positions to left side entrance
-    const playerTokens = room.tokens.filter(t => t.type === 'player');
-    const spawnCoords = [
-      { x: 3, y: 7 }, { x: 3, y: 5 }, { x: 3, y: 9 },
-      { x: 2, y: 6 }, { x: 2, y: 8 }, { x: 4, y: 7 }
-    ];
-    playerTokens.forEach((pt, idx) => {
-      const c = spawnCoords[idx % spawnCoords.length];
-      pt.x = c.x;
-      pt.y = c.y;
+    const targetLand = STORY_CAMPAIGN.lands.find(l => l.id === adventureId) || STORY_CAMPAIGN.lands[0];
+    loadLandIntoRoom(room, targetLand.id);
+
+    io.to(currentRoomId).emit('room:land_advanced', {
+      landId: targetLand.id,
+      landName: targetLand.name,
+      portalPosition: room.portalPosition,
+      portalName: room.portalName,
+      relics: room.collectedRelics || []
     });
-
-    const newEnemies = adv.enemies.map(e => createMonsterToken(e.monsterId, e.x, e.y, e.name));
-
-    room.currentAdventureId = adv.id;
-    room.map = { ...mapPreset, gridSize: 52 };
-    room.tokens = [...playerTokens, ...newEnemies];
-    room.chests = JSON.parse(JSON.stringify(adv.chests || []));
-    room.combat = { active: false, round: 1, currentTurnIndex: 0, turnOrder: [] };
-    room.fogEnabled = false;
-    room.fog = [];
-
     io.to(currentRoomId).emit('room:map_updated', room.map);
     io.to(currentRoomId).emit('room:tokens_updated', room.tokens);
     io.to(currentRoomId).emit('room:chests_updated', room.chests);
+    io.to(currentRoomId).emit('room:gatherables_updated', room.gatherables);
+    io.to(currentRoomId).emit('room:corpses_updated', room.corpses);
     io.to(currentRoomId).emit('combat:updated', room.combat);
-
-    addRoomMessage(currentRoomId, {
-      sender: '🤖 Mestre Automático',
-      senderType: 'dm',
-      type: 'narration',
-      content: adv.narration
-    });
 
     scheduleSave();
   });
 
   // Generate Random Encounter on current map
-  socket.on('adventure:random_encounter', ({ difficulty = 'medium' }) => {
+  socket.on('adventure:random_encounter', ({ difficulty = 'medium' } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
     const room = rooms[currentRoomId];
 
-    // Remove existing enemies
     const playerTokens = room.tokens.filter(t => t.type === 'player');
 
     let pool = ['goblin', 'kobold', 'skeleton', 'zombie'];
@@ -806,8 +1154,8 @@ io.on('connection', (socket) => {
     scheduleSave();
   });
 
-  // Open Treasure Chest on Map
-  socket.on('chest:open', ({ chestId }) => {
+  // Open Treasure Chest on Map (With Trap Check & AoE Detonation)
+  socket.on('chest:open', ({ chestId } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
     const room = rooms[currentRoomId];
     const chest = (room.chests || []).find(c => c.id === chestId && !c.opened);
@@ -819,6 +1167,51 @@ io.on('connection', (socket) => {
 
     const openerPlayer = room.players[socket.id];
     const openerName = openerPlayer?.character?.name || openerPlayer?.name || 'Um herói';
+    const openerToken = room.tokens.find(t => t.characterId === openerPlayer?.character?.id) ||
+                        room.tokens.find(t => t.type === 'player');
+
+    // 25% chance of magical trap detonation!
+    const isTrapped = chest.trapped !== undefined ? chest.trapped : (Math.random() < 0.25);
+    if (isTrapped) {
+      const trapDmg = rollDie(6) + rollDie(6); // 2d6 explosive damage
+      if (openerToken) {
+        openerToken.hp = Math.max(0, (openerToken.hp || 10) - trapDmg);
+        if (openerPlayer?.character) {
+          openerPlayer.character.hp = openerToken.hp;
+          socket.emit('character:sync', openerPlayer.character);
+        }
+      }
+
+      // Damage any party tokens adjacent to chest
+      room.tokens.forEach(t => {
+        if (t.id !== openerToken?.id && Math.max(Math.abs(t.x - chest.x), Math.abs(t.y - chest.y)) <= 1) {
+          t.hp = Math.max(0, (t.hp || 10) - trapDmg);
+          const pObj = Object.values(room.players).find(p => p.character?.id === t.characterId);
+          if (pObj) {
+            pObj.character.hp = t.hp;
+            io.to(pObj.socketId).emit('character:sync', pObj.character);
+          }
+        }
+      });
+
+      io.to(currentRoomId).emit('combat:visual_effect', {
+        fromX: chest.x,
+        fromY: chest.y,
+        toX: chest.x,
+        toY: chest.y,
+        text: `💥 ARMADILHA EXPLOSIVA! -${trapDmg} DANO`,
+        color: '#EF4444',
+        effectType: 'explosion',
+        isCrit: true
+      });
+
+      addRoomMessage(currentRoomId, {
+        sender: '🤖 Mestre Automático',
+        senderType: 'dm',
+        type: 'narration',
+        content: `💥 **ARMADILHA DETONADA!** O baú estava protegido por runas explosivas que detonaram causando **${trapDmg} de dano**!`
+      });
+    }
 
     // Give gold to all party members and item to opener
     Object.values(room.players).forEach(p => {
@@ -833,6 +1226,7 @@ io.on('connection', (socket) => {
     });
 
     io.to(currentRoomId).emit('room:chests_updated', room.chests);
+    io.to(currentRoomId).emit('room:tokens_updated', room.tokens);
     io.to(currentRoomId).emit('room:players_updated', room.players);
     io.to(currentRoomId).emit('combat:visual_effect', {
       fromX: chest.x,
@@ -854,14 +1248,62 @@ io.on('connection', (socket) => {
     scheduleSave();
   });
 
-  // Execute Direct Combat Action (Attack / Spell / Heal on Target Token)
-  socket.on('combat:execute_action', ({ actorTokenId, targetTokenId, actionType, item, advantageType = 'normal' }) => {
+  // Pray at Mystic Runic Altar / Shrine (Grants 30s Blessing)
+  socket.on('shrine:pray', ({ shrineId } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
+    const room = rooms[currentRoomId];
+    const player = room.players[socket.id];
+    if (!player?.character) return;
+
+    const actorToken = room.tokens.find(t => t.characterId === player.character.id) ||
+                       room.tokens.find(t => t.type === 'player');
+    if (!actorToken) return;
+
+    if (!actorToken.conditions) actorToken.conditions = [];
+    if (!actorToken.conditions.includes('Bênção')) {
+      actorToken.conditions.push('Bênção');
+    }
+
+    const healAmt = 12;
+    player.character.hp = Math.min(player.character.maxHp, (player.character.hp || 0) + healAmt);
+    actorToken.hp = player.character.hp;
+
+    io.to(currentRoomId).emit('combat:visual_effect', {
+      fromX: actorToken.x,
+      fromY: actorToken.y,
+      toX: actorToken.x,
+      toY: actorToken.y,
+      text: `✨ BÊNÇÃO ANCESTRAL! (+${healAmt} PV & +2 DANO)`,
+      color: '#C084FC',
+      effectType: 'heal'
+    });
+
+    addRoomMessage(currentRoomId, {
+      sender: '🤖 Mestre Automático',
+      senderType: 'dm',
+      type: 'narration',
+      content: `✨ **${player.character.name}** orou no **Altar Ancestral**! Uma coluna de luz mística desceu dos céus, restaurando **+${healAmt} PV** e concedendo a **Bênção Ancestral**!`
+    });
+
+    socket.emit('character:sync', player.character);
+    io.to(currentRoomId).emit('room:tokens_updated', room.tokens);
+    scheduleSave();
+  });
+
+  // Execute Direct Combat Action (Attack / Spell / Heal on Target Token)
+  socket.on('combat:execute_action', (data = {}) => {
+    const { actorTokenId, targetTokenId, actionType, item, advantageType = 'normal' } = data || {};
+    if (!currentRoomId || !rooms[currentRoomId] || !item) return;
     const room = rooms[currentRoomId];
 
     const actorToken = room.tokens.find(t => t.id === actorTokenId);
     const targetToken = room.tokens.find(t => t.id === targetTokenId) || actorToken;
     if (!actorToken || !targetToken) return;
+
+    // Se o jogador atacar um inimigo, o inimigo adquire aggro e passa a persegui-lo em tempo real
+    if (targetToken.type === 'enemy' && actorToken.type === 'player' && !targetToken.aggroTargetId) {
+      targetToken.aggroTargetId = actorToken.id;
+    }
 
     const playerObj = room.players[socket.id];
     const char = playerObj?.character;
@@ -869,12 +1311,11 @@ io.on('connection', (socket) => {
     const profBonus = char?.proficiencyBonus || 2;
 
     // 1. WEAPON ATTACK
-    if (actionType === 'weapon' && item) {
+    if (actionType === 'weapon') {
       const distSquares = getGridDistance(actorToken, targetToken);
       const distMeters = distSquares * 1.5;
       const maxRange = item.range || (item.properties?.some(p => p.includes('Munição') || p.includes('Arremesso')) ? 18 : 1.5);
 
-      // Allow slight diagonal tolerance (1 square = 1.5m)
       if (distMeters > maxRange + 1.5) {
         socket.emit('combat:action_error', {
           message: `Alvo fora de alcance! ${targetToken.name} está a ${distMeters}m, mas o alcance de ${item.name} é ${maxRange}m. Mova seu token para mais perto!`
@@ -899,7 +1340,6 @@ io.on('connection', (socket) => {
           const extraCrit = parseDiceFormula(item.damage || '1d8');
           totalDmg += (extraCrit?.rolls.reduce((a, b) => a + b, 0) || 4);
         }
-        // Rogue Sneak Attack bonus!
         if (char?.classId === 'rogue') {
           totalDmg += rollDie(6);
         }
@@ -964,13 +1404,23 @@ io.on('connection', (socket) => {
     }
 
     // 2. SPELL CASTING
-    else if (actionType === 'spell' && item) {
+    else if (actionType === 'spell') {
+      const distSquares = getGridDistance(actorToken, targetToken);
+      const distMeters = distSquares * 1.5;
+      const maxRange = item.range !== undefined ? item.range : 18;
+
+      if (actorToken.id !== targetToken.id && distMeters > maxRange + 1.5) {
+        socket.emit('combat:action_error', {
+          message: `Alvo fora de alcance! ${targetToken.name} está a ${distMeters}m, mas o alcance de ${item.name} é ${maxRange}m. Mova seu token para mais perto!`
+        });
+        return;
+      }
+
       if (item.heal) {
         const parsedHeal = parseDiceFormula(item.heal);
         const healAmt = Math.max(2, (parsedHeal?.total || 5) + getAbilityMod(stats.wis || stats.int || 12));
         targetToken.hp = Math.min(targetToken.maxHp || 20, (targetToken.hp || 0) + healAmt);
 
-        // Sync if target is player
         Object.values(room.players).forEach(p => {
           if (p.character && p.character.id === targetToken.characterId) {
             p.character.hp = targetToken.hp;
@@ -1064,8 +1514,8 @@ io.on('connection', (socket) => {
     scheduleSave();
   });
 
-  // Character sheet updates (including spending Attribute Points!)
-  socket.on('character:update', ({ character }) => {
+  // Character sheet updates
+  socket.on('character:update', ({ character } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId] || !character) return;
     const room = rooms[currentRoomId];
     const derived = calculateCharacterDerivedStats(character);
@@ -1092,20 +1542,23 @@ io.on('connection', (socket) => {
   });
 
   // Token Movement
-  socket.on('token:move', ({ tokenId, x, y }) => {
-    if (!currentRoomId || !rooms[currentRoomId]) return;
+  socket.on('token:move', ({ tokenId, x, y } = {}) => {
+    if (!currentRoomId || !rooms[currentRoomId] || !tokenId) return;
     const room = rooms[currentRoomId];
     const token = room.tokens.find(t => t.id === tokenId);
     if (token) {
       token.x = x;
       token.y = y;
       io.to(currentRoomId).emit('room:token_moved', { tokenId, x, y });
+      if (token.type === 'player') {
+        processRoomMMORPGAggro(currentRoomId, true);
+      }
       scheduleSave();
     }
   });
 
   // Add Token (Monster or NPC)
-  socket.on('token:add', (tokenData) => {
+  socket.on('token:add', (tokenData = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
     const room = rooms[currentRoomId];
     const newToken = {
@@ -1137,8 +1590,8 @@ io.on('connection', (socket) => {
   });
 
   // Update Token
-  socket.on('token:update', (updatedToken) => {
-    if (!currentRoomId || !rooms[currentRoomId] || !updatedToken) return;
+  socket.on('token:update', (updatedToken = {}) => {
+    if (!currentRoomId || !rooms[currentRoomId] || !updatedToken?.id) return;
     const room = rooms[currentRoomId];
     const index = room.tokens.findIndex(t => t.id === updatedToken.id);
     if (index !== -1) {
@@ -1160,9 +1613,11 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('token:delete', ({ tokenId }) => {
-    if (!currentRoomId || !rooms[currentRoomId]) return;
+  socket.on('token:delete', ({ tokenId } = {}) => {
+    if (!currentRoomId || !rooms[currentRoomId] || !tokenId) return;
     const room = rooms[currentRoomId];
+    if (!isSocketDM(room, socket.id)) return;
+
     room.tokens = room.tokens.filter(t => t.id !== tokenId);
     if (room.combat?.active) {
       room.combat.turnOrder = room.combat.turnOrder.filter(id => id !== tokenId);
@@ -1172,9 +1627,11 @@ io.on('connection', (socket) => {
     scheduleSave();
   });
 
-  socket.on('map:change', (mapData) => {
+  socket.on('map:change', (mapData = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
     const room = rooms[currentRoomId];
+    if (!isSocketDM(room, socket.id)) return;
+
     room.map = { ...room.map, ...mapData };
     room.fog = [];
     io.to(currentRoomId).emit('room:map_updated', room.map);
@@ -1182,17 +1639,21 @@ io.on('connection', (socket) => {
     scheduleSave();
   });
 
-  socket.on('fog:toggle_enabled', ({ enabled }) => {
+  socket.on('fog:toggle_enabled', ({ enabled } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
     const room = rooms[currentRoomId];
+    if (!isSocketDM(room, socket.id)) return;
+
     room.fogEnabled = enabled !== undefined ? enabled : !room.fogEnabled;
     io.to(currentRoomId).emit('room:fog_enabled_updated', room.fogEnabled);
     scheduleSave();
   });
 
-  socket.on('fog:reveal', ({ tiles }) => {
+  socket.on('fog:reveal', ({ tiles } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId] || !Array.isArray(tiles)) return;
     const room = rooms[currentRoomId];
+    if (!isSocketDM(room, socket.id)) return;
+
     const currentSet = new Set(room.fog || []);
     tiles.forEach(t => currentSet.add(t));
     room.fog = Array.from(currentSet);
@@ -1200,9 +1661,11 @@ io.on('connection', (socket) => {
     scheduleSave();
   });
 
-  socket.on('fog:hide', ({ tiles }) => {
+  socket.on('fog:hide', ({ tiles } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId] || !Array.isArray(tiles)) return;
     const room = rooms[currentRoomId];
+    if (!isSocketDM(room, socket.id)) return;
+
     const currentSet = new Set(room.fog || []);
     tiles.forEach(t => currentSet.delete(t));
     room.fog = Array.from(currentSet);
@@ -1211,7 +1674,7 @@ io.on('connection', (socket) => {
   });
 
   // Combat Start
-  socket.on('combat:start', ({ turnOrder }) => {
+  socket.on('combat:start', ({ turnOrder } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
     const room = rooms[currentRoomId];
 
@@ -1269,28 +1732,94 @@ io.on('connection', (socket) => {
     scheduleSave();
   });
 
-  socket.on('chat:send', (messageData) => {
+  // MMORPG Real-Time Aggro System (substitui o antigo combate por turnos)
+  socket.on('combat:aggro_detected', ({ monsterId, actorTokenId } = {}) => {
+    if (!currentRoomId || !rooms[currentRoomId]) return;
+    const room = rooms[currentRoomId];
+    const monster = room.tokens.find(t => t.id === monsterId && t.type === 'enemy');
+    const hero = room.tokens.find(t => t.id === actorTokenId && t.type === 'player');
+    if (monster && hero && getGridDistance(monster, hero) <= 2) {
+      monster.aggroTargetId = hero.id;
+    }
+    processRoomMMORPGAggro(currentRoomId, true);
+  });
+
+  // Check Flee Condition: All living players > 18m from all living enemies
+  socket.on('combat:check_flee', () => {
+    if (!currentRoomId || !rooms[currentRoomId]) return;
+    const room = rooms[currentRoomId];
+    if (!room.combat?.active) return;
+
+    const livingEnemies = room.tokens.filter(t => t.type === 'enemy' && (t.hp || 0) > 0);
+    const livingPlayers = room.tokens.filter(t => t.type === 'player' && (t.hp || 0) > 0);
+
+    if (livingEnemies.length === 0) {
+      room.combat.active = false;
+      io.to(currentRoomId).emit('combat:updated', room.combat);
+      return;
+    }
+
+    if (livingPlayers.length === 0) return;
+
+    let allFled = true;
+    for (const player of livingPlayers) {
+      for (const enemy of livingEnemies) {
+        const dist = Math.max(Math.abs(player.x - enemy.x), Math.abs(player.y - enemy.y));
+        if (dist < 12) { // 12 squares = 18m
+          allFled = false;
+          break;
+        }
+      }
+      if (!allFled) break;
+    }
+
+    if (allFled) {
+      if (aiTurnTimeouts[currentRoomId]) {
+        clearTimeout(aiTurnTimeouts[currentRoomId]);
+        delete aiTurnTimeouts[currentRoomId];
+      }
+      room.combat = { active: false, round: 1, currentTurnIndex: 0, turnOrder: [] };
+      io.to(currentRoomId).emit('combat:updated', room.combat);
+
+      addRoomMessage(currentRoomId, {
+        sender: '🤖 Mestre Automático',
+        senderType: 'dm',
+        type: 'narration',
+        content: `🏃💨 **FUGA COM SUCESSO!** O grupo recuou mais de 18 metros dos monstros e escapou! Retornando à exploração livre em tempo real.`
+      });
+      scheduleSave();
+    }
+  });
+
+  socket.on('chat:send', (messageData = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
     addRoomMessage(currentRoomId, messageData);
     scheduleSave();
   });
 
-  socket.on('economy:buy', ({ itemId, item, cost }) => {
+  socket.on('economy:buy', ({ itemId, item, cost } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
     const room = rooms[currentRoomId];
     const player = room.players[socket.id];
     if (player && player.character) {
       const char = player.character;
-      if ((char.gold ?? 0) >= cost) {
-        char.gold -= cost;
+      const catalogItem = ITEMS[itemId] || item;
+      if (!catalogItem) return;
+
+      const validCost = catalogItem.cost || 0;
+      if (validCost <= 0) return;
+      if (cost !== undefined && cost !== validCost) return;
+
+      if ((char.gold ?? 0) >= validCost) {
+        char.gold -= validCost;
         if (!char.inventory) char.inventory = [];
-        char.inventory.push(item);
+        char.inventory.push(catalogItem);
 
         const derived = calculateCharacterDerivedStats(char);
         char.ac = derived.ac;
-        if (item.hpBonus) {
-          char.maxHp += item.hpBonus;
-          char.hp += item.hpBonus;
+        if (catalogItem.hpBonus) {
+          char.maxHp = (char.maxHp || 10) + catalogItem.hpBonus;
+          char.hp = (char.hp || 10) + catalogItem.hpBonus;
         }
 
         const pTok = room.tokens.find(t => t.characterId === char.id);
@@ -1307,28 +1836,42 @@ io.on('connection', (socket) => {
         addRoomMessage(currentRoomId, {
           sender: 'Mercador',
           senderType: 'system',
-          content: `💰 **${char.name}** comprou **${item.name}** por ${cost} PO.`
+          content: `💰 **${char.name}** comprou **${catalogItem.name}** por ${validCost} PO.`
         });
         scheduleSave();
+      } else {
+        socket.emit('combat:action_error', { message: 'Ouro insuficiente para comprar este item!' });
       }
     }
   });
 
-  socket.on('economy:sell', ({ itemIndex, sellPrice }) => {
+  socket.on('economy:sell', ({ itemIndex, sellPrice } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
     const room = rooms[currentRoomId];
     const player = room.players[socket.id];
-    if (player && player.character && player.character.inventory) {
+    if (player && player.character && Array.isArray(player.character.inventory)) {
       const char = player.character;
+      if (typeof itemIndex !== 'number' || itemIndex < 0 || itemIndex >= char.inventory.length) return;
       const soldItem = char.inventory[itemIndex];
       if (soldItem) {
         char.inventory.splice(itemIndex, 1);
-        char.gold = (char.gold || 0) + sellPrice;
+        const validPrice = typeof sellPrice === 'number' && sellPrice > 0 ? sellPrice : Math.max(1, Math.floor((soldItem.cost || 10) / 2));
+        char.gold = (char.gold || 0) + validPrice;
+
+        if (soldItem.hpBonus) {
+          char.maxHp = Math.max(1, (char.maxHp || 10) - soldItem.hpBonus);
+          char.hp = Math.min(char.hp, char.maxHp);
+        }
+
         const derived = calculateCharacterDerivedStats(char);
         char.ac = derived.ac;
 
         const pTok = room.tokens.find(t => t.characterId === char.id);
-        if (pTok) pTok.ac = char.ac;
+        if (pTok) {
+          pTok.ac = char.ac;
+          pTok.maxHp = char.maxHp;
+          pTok.hp = char.hp;
+        }
 
         socket.emit('character:sync', char);
         io.to(currentRoomId).emit('room:tokens_updated', room.tokens);
@@ -1337,16 +1880,18 @@ io.on('connection', (socket) => {
         addRoomMessage(currentRoomId, {
           sender: 'Mercador',
           senderType: 'system',
-          content: `🪙 **${char.name}** vendeu **${soldItem.name}** e recebeu ${sellPrice} PO.`
+          content: `🪙 **${char.name}** vendeu **${soldItem.name}** e recebeu ${validPrice} PO.`
         });
         scheduleSave();
       }
     }
   });
 
-  socket.on('economy:grant_loot', ({ targetCharacterId, gold, itemName }) => {
+  socket.on('economy:grant_loot', ({ targetCharacterId, gold, itemName } = {}) => {
     if (!currentRoomId || !rooms[currentRoomId]) return;
     const room = rooms[currentRoomId];
+    if (!isSocketDM(room, socket.id)) return;
+
     Object.values(room.players).forEach(p => {
       if (p.character && (!targetCharacterId || p.character.id === targetCharacterId)) {
         if (gold) p.character.gold = (p.character.gold || 0) + gold;
@@ -1366,9 +1911,236 @@ io.on('connection', (socket) => {
     scheduleSave();
   });
 
-  socket.on('map:ping', ({ x, y, color }) => {
+  socket.on('map:ping', ({ x, y, color } = {}) => {
     if (!currentRoomId) return;
     io.to(currentRoomId).emit('map:ping_received', { x, y, color, senderId: socket.id });
+  });
+
+  // Tibia Style: Loot Corpse on the Ground
+  socket.on('corpse:loot', ({ corpseId } = {}) => {
+    if (!currentRoomId || !rooms[currentRoomId] || !corpseId) return;
+    const room = rooms[currentRoomId];
+    if (!room.corpses) room.corpses = [];
+
+    const corpse = room.corpses.find(c => c.id === corpseId);
+    if (!corpse || corpse.opened) return;
+
+    const player = room.players[socket.id];
+    const char = player?.character;
+    if (!char) return;
+
+    const goldLoot = corpse.gold || 0;
+    const itemsLoot = corpse.items || [];
+
+    char.gold = (char.gold || 0) + goldLoot;
+    if (!char.inventory) char.inventory = [];
+    itemsLoot.forEach(item => {
+      char.inventory.push(item);
+    });
+
+    corpse.opened = true;
+    corpse.gold = 0;
+    corpse.items = [];
+
+    socket.emit('character:sync', char);
+    io.to(currentRoomId).emit('room:corpses_updated', room.corpses);
+    io.to(currentRoomId).emit('room:players_updated', room.players);
+
+    io.to(currentRoomId).emit('combat:visual_effect', {
+      fromX: corpse.x,
+      fromY: corpse.y,
+      toX: corpse.x,
+      toY: corpse.y,
+      text: `💰 +${goldLoot} PO ${itemsLoot.length > 0 ? `& ${itemsLoot.map(i => i.name).join(', ')}` : ''}!`,
+      color: '#F59E0B',
+      effectType: 'heal'
+    });
+
+    addRoomMessage(currentRoomId, {
+      sender: 'Loot',
+      senderType: 'system',
+      type: 'narration',
+      content: `🎒 **${char.name}** saqueou o **${corpse.name}**: +${goldLoot} PO${itemsLoot.length > 0 ? `, itens: ${itemsLoot.map(i => i.name).join(', ')}` : ''}!`
+    });
+    scheduleSave();
+  });
+
+  // Tibia Style: Exori AoE Strike around hero
+  socket.on('tibia:exori', ({ actorTokenId } = {}) => {
+    if (!currentRoomId || !rooms[currentRoomId]) return;
+    const room = rooms[currentRoomId];
+    const actor = room.tokens.find(t => t.id === actorTokenId);
+    if (!actor) return;
+
+    const player = room.players[socket.id];
+    const char = player?.character;
+    const strMod = getAbilityMod(char?.stats?.str || 14);
+
+    const adjacentEnemies = room.tokens.filter(t => 
+      t.type === 'enemy' && 
+      (t.hp || 0) > 0 &&
+      Math.max(Math.abs(t.x - actor.x), Math.abs(t.y - actor.y)) <= 1
+    );
+
+    if (adjacentEnemies.length === 0) {
+      socket.emit('combat:action_error', { message: 'Nenhum inimigo ao seu redor para atingir com Exori!' });
+      return;
+    }
+
+    io.to(currentRoomId).emit('combat:visual_effect', {
+      fromX: actor.x,
+      fromY: actor.y,
+      toX: actor.x,
+      toY: actor.y,
+      text: '⚔️ EXORI!',
+      color: '#F59E0B',
+      effectType: 'slash'
+    });
+
+    adjacentEnemies.forEach(enemy => {
+      const dmg = rollDie(8) + strMod + 2;
+      enemy.hp = Math.max(0, (enemy.hp || 10) - dmg);
+
+      io.to(currentRoomId).emit('combat:visual_effect', {
+        fromX: actor.x,
+        fromY: actor.y,
+        toX: enemy.x,
+        toY: enemy.y,
+        text: `💥 -${dmg} FÍSICO`,
+        color: '#EF4444',
+        effectType: 'slash'
+      });
+
+      if (enemy.hp <= 0) {
+        handleEnemyDefeated(currentRoomId, enemy, actor.name);
+      }
+    });
+
+    io.to(currentRoomId).emit('room:tokens_updated', room.tokens);
+    addRoomMessage(currentRoomId, {
+      sender: actor.name,
+      senderType: 'player',
+      type: 'chat',
+      content: `⚔️ **${actor.name}** bradou ***EXORI!*** girando a espada e atingindo **${adjacentEnemies.length}** inimigos ao redor!`
+    });
+    scheduleSave();
+  });
+
+  // Tibia Style: Respawn Monsters in Map
+  socket.on('room:respawn_monsters', () => {
+    if (!currentRoomId || !rooms[currentRoomId]) return;
+    const room = rooms[currentRoomId];
+    const livingEnemies = room.tokens.filter(t => t.type === 'enemy' && (t.hp || 0) > 0);
+    if (livingEnemies.length >= 8) return;
+
+    const monsterKeys = Object.keys(MONSTERS);
+    const count = 3;
+    for (let i = 0; i < count; i++) {
+      const mKey = monsterKeys[Math.floor(Math.random() * monsterKeys.length)];
+      const rx = 10 + Math.floor(Math.random() * 8);
+      const ry = 4 + Math.floor(Math.random() * 8);
+      const monTok = createMonsterToken(mKey, rx, ry);
+      room.tokens.push(monTok);
+    }
+
+    io.to(currentRoomId).emit('room:tokens_updated', room.tokens);
+    addRoomMessage(currentRoomId, {
+      sender: '🤖 Mestre Automático',
+      senderType: 'dm',
+      type: 'narration',
+      content: `🐺 **RESPAWN!** Novos monstros surgiram nas profundezas da masmorra!`
+    });
+    scheduleSave();
+  });
+
+  // Advance to Next Land through Portal
+  socket.on('land:advance', () => {
+    if (!currentRoomId || !rooms[currentRoomId]) return;
+    const room = rooms[currentRoomId];
+    if (!room.bossDefeated) {
+      socket.emit('combat:action_error', { message: 'O Portal está selado! O Boss desta Land precisa ser derrotado primeiro.' });
+      return;
+    }
+
+    const currentIndex = STORY_CAMPAIGN.lands.findIndex(l => l.id === room.currentLandId);
+    if (currentIndex >= 0 && currentIndex < STORY_CAMPAIGN.lands.length - 1) {
+      const nextLand = STORY_CAMPAIGN.lands[currentIndex + 1];
+      loadLandIntoRoom(room, nextLand.id);
+
+      io.to(currentRoomId).emit('room:land_advanced', {
+        landId: nextLand.id,
+        landName: nextLand.name,
+        portalPosition: room.portalPosition,
+        portalName: room.portalName,
+        relics: room.collectedRelics || [],
+        land: nextLand,
+        room
+      });
+      io.to(currentRoomId).emit('room:map_updated', room.map);
+      io.to(currentRoomId).emit('room:tokens_updated', room.tokens);
+      io.to(currentRoomId).emit('room:chests_updated', room.chests);
+      io.to(currentRoomId).emit('room:gatherables_updated', room.gatherables);
+      io.to(currentRoomId).emit('room:players_updated', room.players);
+      io.to(currentRoomId).emit('combat:updated', room.combat);
+      scheduleSave();
+    } else {
+      // Land 4 Concluída: Vitória Final da Campanha!
+      addRoomMessage(currentRoomId, {
+        sender: '👑 O Destino de Eldoria',
+        senderType: 'dm',
+        type: 'narration',
+        content: `🌟 **VITÓRIA ABSOLUTA DA CAMPANHA!**\nAs Quatro Relíquias de Eldoria foram reunidas! A Coroa da Luz foi restaurada e a escuridão foi expurgada de todo o continente! Parabéns a todos os bravos heróis que lutaram até o fim!`
+      });
+      io.to(currentRoomId).emit('campaign:victory');
+    }
+  });
+
+  // Collect Resource from Map (Herb, Mushroom, Crystal)
+  socket.on('gatherable:collect', ({ id } = {}) => {
+    if (!currentRoomId || !rooms[currentRoomId] || !id) return;
+    const room = rooms[currentRoomId];
+    if (!room.gatherables) return;
+
+    const res = room.gatherables.find(g => g.id === id && !g.gathered);
+    if (!res) return;
+
+    res.gathered = true;
+    const player = room.players[socket.id];
+    const char = player?.character;
+    if (char) {
+      const goldAmt = Math.floor(Math.random() * 15) + 10;
+      char.gold = (char.gold || 0) + goldAmt;
+      char.hp = Math.min(char.maxHp, (char.hp || 10) + 6);
+      if (!char.inventory) char.inventory = [];
+      char.inventory.push({
+        id: `res_${Date.now()}`,
+        name: res.name,
+        type: 'consumable',
+        desc: `Recurso natural de Eldoria: ${res.name}`,
+        heal: '1d6+2',
+        cost: 20
+      });
+      socket.emit('character:sync', char);
+      io.to(currentRoomId).emit('room:players_updated', room.players);
+    }
+
+    io.to(currentRoomId).emit('room:gatherables_updated', room.gatherables);
+    io.to(currentRoomId).emit('combat:visual_effect', {
+      fromX: res.x,
+      fromY: res.y,
+      toX: res.x,
+      toY: res.y,
+      text: `🌿 +${res.name}! (+6 PV & +10 PO)`,
+      color: '#10B981',
+      effectType: 'heal'
+    });
+
+    addRoomMessage(currentRoomId, {
+      sender: 'Exploração',
+      senderType: 'system',
+      content: `🌿 **${char ? char.name : 'Um herói'}** coletou **${res.name}** (+6 PV e +10 PO)!`
+    });
+    scheduleSave();
   });
 
   socket.on('disconnect', () => {
@@ -1386,10 +2158,15 @@ if (fs.existsSync(distPath)) {
   });
 }
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`===============================================`);
-  console.log(`🏰 REINOS & MASMORRAS - D&D 5E ONLINE (V2.0)`);
-  console.log(`🌐 Servidor rodando em http://localhost:${PORT}`);
-  console.log(`🤖 Mestre Automático e Combate Tático Ativos!`);
-  console.log(`===============================================`);
-});
+export { app, server, io, rooms, createInitialRoom, loadLandIntoRoom, processRoomMMORPGAggro };
+
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`===============================================`);
+    console.log(`🏰 REINOS & MASMORRAS - D&D 5E ONLINE (V2.0)`);
+    console.log(`🌐 Servidor rodando em http://localhost:${PORT}`);
+    console.log(`🤖 Mestre Automático e Combate Tático Ativos!`);
+    console.log(`🗡️ Modo Tibia Ativo: WASD, Auto-Ataque, Hotkeys 1-5 e Cadáveres!`);
+    console.log(`===============================================`);
+  });
+}
