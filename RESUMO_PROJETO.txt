@@ -1,0 +1,136 @@
+================================================================================
+              REINOS & MASMORRAS - RESUMO DO QUE FOI FEITO
+         MMORPG 2D em Tempo Real: A Lenda das Quatro Relíquias de Eldoria
+================================================================================
+
+1. HISTÓRIA FIXA E PROGRESSÃO POR 4 LANDS ("A LENDA DAS QUATRO RELÍQUIAS DE ELDORIA")
+--------------------------------------------------------------------------------
+- Arquivos principais:
+  * src/data/storyCampaign.js (STORY_CAMPAIGN)
+  * src/components/StoryQuestHUD.jsx
+
+- Estrutura da Campanha:
+  Os jogadores avançam por uma história contínua dividida em 4 regiões extensas
+  e semi-abertas (Lands):
+  1) Land 1 — A Floresta das Raízes Antigas (46x32 quadrados)
+     - Boss: Arachna, a Tecedora Sombria (55 PV)
+     - Relíquia: Lágrima de Esmeralda
+  2) Land 2 — O Pântano da Bruxa dos Espelhos (48x34 quadrados)
+     - Boss: Gargatroll, a Abominação do Lodo (95 PV)
+     - Relíquia: Olho de Âmbar do Pântano
+  3) Land 3 — As Cavernas e Minas de Cristal (50x36 quadrados)
+     - Boss: O Colosso de Cristal Ancestral (150 PV)
+     - Relíquia: Coração de Safira Cintilante
+  4) Land 4 — A Masmorra Proibida & Cripta Infernal (52x38 quadrados)
+     - Boss Final: Malakor, o Lorde Tirano das Trevas (220 PV)
+     - Relíquia: Coroa Unificada dos Quatro Reinos
+
+- Sistema de Portal de Passagem:
+  Cada Land possui um Portal selado pelo Boss local. Ao derrotar o Boss, o grupo
+  conquista a Relíquia da região, destrava o Portal e pode pressionar [E] no
+  portal para avançar juntos para a próxima Land.
+
+
+2. MAPAS 2D PRÓPRIOS INSPIRADOS EM CADA REGIÃO (SEM IMAGEM ESTÁTICA DE FUNDO)
+--------------------------------------------------------------------------------
+- Arquivos principais:
+  * src/utils/mapRenderer.js (renderThemedFloor e render3DObstacles)
+  * src/data/dndData.js (MAP_PRESETS)
+
+- O que foi feito:
+  Foi removida a utilização de imagens estáticas (.jpg) no fundo do Canvas. Em
+  seu lugar, foi criado um renderizador 2D procedural próprio inspirado nas
+  características visuais de cada região:
+  * Floresta: Trilhas sinuosas de terra batida com bordas de pedra, Rio
+    Sussurrante no sudoeste com ondulações animadas e ponte de tábuas de
+    madeira, acampamento seguro no nordeste com tendas de lona, fogueira com
+    bancos de tronco, bancada de ferreiro, bosques densos, flores silvestres,
+    cogumelos e paredão rochoso na caverna do Boss.
+  * Pântano: Canais de lodo verde-escuro com vitórias-régias, duas pontes de
+    madeira ligando as ilhas, Cabana da Bruxa Baba Morwenna construída sobre
+    palafitas ao nordeste, caldeirão alquímico, salgueiros mortos cobertos de
+    musgo e ossadas pelo brejo.
+  * Cavernas e Minas de Cristal: Piso subterrâneo rochoso com trilhos de ferro
+    de vagonetas de mineração, escadas de madeira nas passagens, formações de
+    cristais brilhantes de safira (azul) e ametista (roxo), lago subterrâneo e
+    acampamento dos mineiros de Thorin.
+  * Masmorra Proibida: Lajes de pedra sombria com musgo, refúgio barricado dos
+    Cruzados no noroeste com tendas e fogueira sagrada, sarcófagos reais
+    esculpidos na cripta norte, celas de prisão com grades de ferro no sudoeste,
+    armadilhas de espinhos no corredor e câmara do Altar Rúnico de Malakor.
+
+
+3. COMBATE MMORPG 100% EM TEMPO REAL E AGGRO POR PROXIMIDADE (<= 2 QUADRADOS)
+--------------------------------------------------------------------------------
+- Arquivos principais:
+  * server/index.js (processRoomMMORPGAggro e loop de tick MMORPG)
+  * src/components/BattleMap.jsx
+  * src/App.jsx
+
+- O que foi feito:
+  * Fim do Combate por Turnos: Foram removidas as restrições de movimento por
+    turno, rolagens de iniciativa e botões de passar turno. A movimentação pelo
+    mapa (WASD, setas ou clique do mouse) é 100% livre e em tempo real.
+  * Perseguição por Proximidade (<= 2 de distância): Quando um jogador passa a
+    2 quadrados ou menos de um inimigo (ou o ataca), o inimigo emite um alerta
+    ("❗"), fixa o aggro no jogador (aggroTargetId) e passa a persegui-lo
+    quadrado por quadrado em tempo real desviando dos obstáculos do mapa.
+  * Ataques em Tempo Real: Quando o inimigo encosta no jogador (distância <= 1.5),
+    ele ataca automaticamente em tempo real com tempo de recarga próprio.
+  * Indicadores Visuais: Inimigos perseguindo exibem aura vermelha pulsante,
+    badge "❗ PERSEGUINDO" e indicador pontilhado do raio de aggro de 2 quadrados.
+  * Respawn no Acampamento: Caso o jogador chegue a 0 PV, ele renasce no
+    Acampamento Seguro da Land atual com a vida restaurada.
+
+
+4. PERSONAGEM 2D COM PERSONALIZAÇÃO DE ROUPAS E APARÊNCIA
+--------------------------------------------------------------------------------
+- Arquivos principais:
+  * src/data/characterSpriteData.js
+  * src/components/Character2DSprite.jsx (drawCharacter2D)
+  * src/components/Lobby.jsx
+  * src/components/CharacterSheetModal.jsx
+
+- O que foi feito:
+  Cada jogador e NPC possui um sprite 2D modular desenhado em camadas no Canvas,
+  com personalização completa de:
+  * Tom de pele, estilo de cabelo e cor do cabelo;
+  * Tipo de traje/roupa (Túnica de Aventureiro, Armadura de Couro, Manto de
+    Mago, Armadura de Placas, Capa de Patrulheiro e Traje Furtivo);
+  * Cores primária e secundária da roupa;
+  * Acessório de cabeça (elmo, chapéu de mago, capuz, tiara), capa, escudo e
+    arma empunhada.
+
+
+5. EXPLORAÇÃO, NPCS, COLETA E ESCALONAMENTO DE ITENS E MONSTROS
+--------------------------------------------------------------------------------
+- Arquivos principais:
+  * src/components/NPCDialogueModal.jsx
+  * src/data/dndData.js (ITEMS e MONSTERS)
+
+- O que foi feito:
+  * NPCs Interativos [E]: Cada Land possui NPCs próprios com diálogos sobre a
+    história da região, dicas de localização de baús, bênçãos de cura gratuita
+    e lojas de equipamentos.
+  * Coleta e Tesouros [E]: Ervas medicinais, cogumelos, cristais e relíquias
+    coletáveis diretamente no chão do mapa, além de baús de tesouro e saque
+    (loot) nos corpos dos monstros derrotados.
+  * Escalonamento de Poder: Os monstros, Bosses e equipamentos (armas,
+    armaduras, escudos, anéis e elixires) ficam progressivamente mais fortes e
+    valiosos da Land 1 (Floresta) até a Land 4 (Masmorra).
+
+
+6. VALIDAÇÃO E TESTES AUTOMATIZADOS
+--------------------------------------------------------------------------------
+- Arquivos de teste:
+  * tests/server-integration.test.js
+  * tests/story-campaign.test.js
+  * tests/pathfinding.test.js
+  * tests/unit-mechanics.test.js
+
+- Resultado:
+  39 de 39 testes automatizados passando (100% de aprovação), validando a
+  arquitetura 2D própria dos 4 mapas, progressão completa das 4 Lands, sistema
+  de lojas, coleta, derrota de Bosses e o sistema MMORPG de aggro a 2 quadrados
+  com perseguição em tempo real.
+================================================================================
